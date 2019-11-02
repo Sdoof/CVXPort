@@ -11,3 +11,4 @@ class Freq(Enum):
     HOURLY = 'H'
     MINUTE = 'M'
     MINUTE5 = '5M'
+    TICK = 'T'  # for testing only. We don't have the infra to trade on tick
