@@ -1,54 +1,55 @@
 
-# from cvxport.data import MT4DataObject
-# from cvxport.const import Freq
+from cvxport.data import MT4DataObject
+from cvxport.const import Freq
+import pandas as pd
 import asyncio
 import zmq
 import zmq.asyncio as azmq
 
 
-# data_obj = MT4DataObject(['usd', 'eur'], 12345)
-# data_obj.set_params(Freq.TICK, 5)
-
-
-# async def get_data():
-#     res = []
-#     counter = 0
-#     async for data in data_obj():
-#         res.append(data)
-#         counter += 1
-#         if counter > 3:
-#             break
-#
-#     return res
-
 async def client():
-    context = azmq.Context()
-    socket = context.socket(zmq.SUB)
-    socket.connect('tcp://127.0.0.1:5557')
-    socket.setsockopt_string(zmq.SUBSCRIBE, 'usd')
+    data_obj = MT4DataObject(['usd', 'eur'], 12345)
+    data_obj.set_params(Freq.TICK, 5)
 
-    print('client starts')
-    for _ in range(5):
-        msg = await socket.recv_string()
-        print(f'[client]    {msg}')
+    res = []
+    counter = 0
+    async for data in data_obj():
+        res.append(data)
+        print(res[-1][0])
+        counter += 1
+        if counter > 3:
+            break
+
+    return res
 
 
 async def server():
     context = azmq.Context()
     socket = context.socket(zmq.PUB)
-    socket.bind('tcp://127.0.0.1:5557')
+    socket.bind('tcp://127.0.0.1:12345')
 
-    await asyncio.sleep(0.01)
+    data = [
+        'usd 1;1.1',
+        'eur 2;2.05',
+        'usd 1.1;1.15',
+        'usd 1.15;1.2',
+        'eur 2.05;2.1',
+        'eur 2.05;2.1',
+        'usd 1.05;1.1',
+    ]
+
+    await asyncio.sleep(1)
     print('server starts')
-    for x in range(10):
-        await socket.send_string(f'usd {x}')
-        print(f'[server]    {x}')
-        await asyncio.sleep(1)
+    for msg in data:
+        await socket.send_string(msg)
+        print(f'sent    {pd.Timestamp.now("UTC")}')
+        await asyncio.sleep(0.1)
+    print('server finishes')
 
 
 async def main():
     res = await asyncio.gather(client(), server())
-    print(res)
+    return res
 
-
-asyncio.run(main())
+aaa = asyncio.run(main())
+print(aaa)

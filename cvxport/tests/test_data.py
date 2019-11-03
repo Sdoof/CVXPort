@@ -1,8 +1,11 @@
 
 import unittest
 import pandas as pd
-from numpy.testing import assert_array_equal
+from numpy.testing import assert_array_equal, assert_array_almost_equal
 import numpy as np
+import zmq.asyncio as azmq
+import zmq
+import asyncio
 from cvxport.data import Bar, TimedBars, BarPanel, MT4DataObject
 from cvxport.const import Freq
 
@@ -103,9 +106,8 @@ class TestBar(unittest.TestCase):
             res.append(bars(t, k, v))
 
         # 1st bar
-        # we don't test time idx here because we use list to store them and it becomes the exactly the same for
-        # each period. This shouldn't be an issue in practice
         self.assertEqual([None] * 5, res[:5])
+        self.assertEqual(pd.Timestamp('2019-01-01 00:01:00'), res[5][0])
         assert_array_equal([[1.0, 2.0]], res[5][1]['open'])
         assert_array_equal([[1.1, 2]], res[5][1]['high'])
         assert_array_equal([[0.9, 1.9]], res[5][1]['low'])
@@ -113,12 +115,14 @@ class TestBar(unittest.TestCase):
 
         # 2nd bar
         self.assertEqual(None, res[6])
+        self.assertEqual(pd.Timestamp('2019-01-01 00:03:00'), res[7][0])
         assert_array_equal([[1.0, 2.0], [1, 2]], res[7][1]['open'])
         assert_array_equal([[1.1, 2], [1, 2]], res[7][1]['high'])
         assert_array_equal([[0.9, 1.9], [1, 2]], res[7][1]['low'])
         assert_array_equal([[1, 1.9], [1, 2]], res[7][1]['close'])
 
         # 3rd bar
+        self.assertEqual(pd.Timestamp('2019-01-01 00:04:00'), res[8][0])
         assert_array_equal([[1.0, 2.0], [1, 2], [1, np.nan]], res[8][1]['open'])
         assert_array_equal([[1.1, 2], [1, 2], [1, np.nan]], res[8][1]['high'])
         assert_array_equal([[0.9, 1.9], [1, 2], [1, np.nan]], res[8][1]['low'])
@@ -126,12 +130,14 @@ class TestBar(unittest.TestCase):
 
         # 4rd bar
         self.assertEqual([None] * 4, res[9: 13])
+        self.assertEqual(pd.Timestamp('2019-01-01 00:05:00'), res[13][0])
         assert_array_equal([[1.0, 2.0], [1, 2], [1, np.nan], [1.3, 2]], res[13][1]['open'])
         assert_array_equal([[1.1, 2], [1, 2], [1, np.nan], [1.3, 2.4]], res[13][1]['high'])
         assert_array_equal([[0.9, 1.9], [1, 2], [1, np.nan], [1.3, 1.8]], res[13][1]['low'])
         assert_array_equal([[1, 1.9], [1, 2], [1, np.nan], [1.3, 2.4]], res[13][1]['close'])
 
         # 5th bar
+        self.assertEqual(pd.Timestamp('2019-01-01 00:06:00'), res[14][0])
         assert_array_equal([[1.0, 2.0], [1, 2], [1, np.nan], [1.3, 2], [1, np.nan]], res[14][1]['open'])
         assert_array_equal([[1.1, 2], [1, 2], [1, np.nan], [1.3, 2.4], [1, np.nan]], res[14][1]['high'])
         assert_array_equal([[0.9, 1.9], [1, 2], [1, np.nan], [1.3, 1.8], [1, np.nan]], res[14][1]['low'])
@@ -139,13 +145,7 @@ class TestBar(unittest.TestCase):
 
         # 6th bar
         # we test time idx here since it's the final one
-        self.assertEqual([
-            pd.Timestamp('2019-01-01 00:03:00'),
-            pd.Timestamp('2019-01-01 00:04:00'),
-            pd.Timestamp('2019-01-01 00:05:00'),
-            pd.Timestamp('2019-01-01 00:06:00'),
-            pd.Timestamp('2019-01-01 00:07:00')
-        ], res[15][0])
+        self.assertEqual(pd.Timestamp('2019-01-01 00:07:00'), res[15][0])
         assert_array_equal([[1, 2], [1, np.nan], [1.3, 2], [1, np.nan], [np.nan, 2]], res[15][1]['open'])
         assert_array_equal([[1, 2], [1, np.nan], [1.3, 2.4], [1, np.nan], [np.nan, 2]], res[15][1]['high'])
         assert_array_equal([[1, 2], [1, np.nan], [1.3, 1.8], [1, np.nan], [np.nan, 2]], res[15][1]['low'])
@@ -154,12 +154,70 @@ class TestBar(unittest.TestCase):
 
 class TestMT4DataObject(unittest.TestCase):
     def test_mt4(self):
-        data_obj = MT4DataObject(['usd', 'eur'], 12345)
+        async def client():
+            # put data object inside client so that socket will be closed properly after going out of scope
+            data_obj = MT4DataObject(['usd', 'eur'], 12345)
+            data_obj.set_params(Freq.TICK, 4)
 
-        async def get_data():
             res = []
-            for _ in range(3):
-                pass
+            counter = 0
+            async for data in data_obj():
+                res.append(data)
+                counter += 1
+                if counter > 4:
+                    break
+
+            return res
+
+        async def server():
+            context = azmq.Context()
+            socket = context.socket(zmq.PUB)
+            socket.bind('tcp://127.0.0.1:12345')
+
+            data = [
+                'usd 1;1.1',
+                'eur 2;2.05',
+                'usd 1.1;1.15',
+                'usd 1.15;1.2',
+                'eur 2.05;2.1',
+                'eur 2.1;2.1',
+            ]
+
+            await asyncio.sleep(1)  # let client to warm up
+            print('server starts')
+            for msg in data:
+                await socket.send_string(msg)
+                await asyncio.sleep(0.1)
+            print('server finishes')
+
+        async def main():
+            res, _ = await asyncio.gather(client(), server())
+            return res
+
+        result = asyncio.run(main())
+
+        self.assertEqual(5, len(result))
+
+        # 1st bar
+        assert_array_equal([[1.05, 2.025]], result[0][1]['open'])
+
+        # 2nd bar
+        self.assertTrue(result[0][0] < result[1][0])
+        assert_array_equal([[1.05, 2.025], [1.125, np.nan]], result[1][1]['open'])
+
+        # 3rd bar
+        self.assertTrue(result[1][0] < result[2][0])
+        assert_array_almost_equal([[1.05, 2.025], [1.125, np.nan], [1.175, np.nan]], result[2][1]['open'], decimal=10)
+
+        # 4th bar
+        self.assertTrue(result[2][0] < result[3][0])
+        assert_array_almost_equal([[1.05, 2.025], [1.125, np.nan], [1.175, np.nan], [np.nan, 2.075]],
+                                  result[3][1]['open'], decimal=10)
+
+        # 5th bar
+        self.assertTrue(result[3][0] < result[4][0])
+        assert_array_almost_equal([[1.125, np.nan], [1.175, np.nan], [np.nan, 2.075], [np.nan, 2.1]],
+                                  result[4][1]['open'], decimal=10)
 
 
 if __name__ == '__main__':

@@ -38,9 +38,11 @@ class MT4DataObject(DataObject):
 
         self.port = port
         self.bar = None  # to be initialized in set_params
+
+        # connect to server
         self.context = azmq.Context()
         self.in_socket = self.context.socket(zmq.SUB)
-        self.in_socket.connect(f'tcp://localhost:{port}')
+        self.in_socket.connect(f'tcp://127.0.0.1:{port}')
 
         # subscribe to ticket data
         for ticker in tickers:
@@ -73,12 +75,13 @@ class OfflineDataObject(DataObject):
             start = idx - self.lookback
             # TODO: check if index and values aligned
             yield self.data['close'].index[idx], {k: v.iloc[start: idx] for k, v in self.data.items()}
-            await asyncio.sleep(0)
+            await asyncio.sleep(0)  # to yield control to other process
 
 
 class BarPanel:
     """
-    Keep track of bar data for a specified period of time. Based on TimeBars
+    Extend TimedBar (single period) to store "lookback" periods of data.
+    Return panel data of open, high, low, close, of size T x N, where T is lookback and N is number of tickers
     """
     def __init__(self, tickers: List[str], freq: Freq, lookback: int):
         self.tickers = tickers
@@ -88,14 +91,13 @@ class BarPanel:
         self.bars = TimedBars(tickers, freq)  # for a single period
 
         # data variables
-        self.time_idx = []
         self.opens = np.empty((0, self.N), float)
         self.highs = np.empty((0, self.N), float)
         self.lows = np.empty((0, self.N), float)
         self.closes = np.empty((0, self.N), float)
 
     def __call__(self, timestamp: pd.Timestamp, ticker: str, price: float) \
-            -> Union[Tuple[List[pd.Timestamp], Dict[str, np.ndarray]], None]:
+            -> Union[Tuple[pd.Timestamp, Dict[str, np.ndarray]], None]:
         """
         Update tick data and return data frames of open, high, low, close when a new bar is updated.
         Otherwise, return None
@@ -111,28 +113,26 @@ class BarPanel:
         data = self.bars(timestamp, ticker, price)  # update bar data
         if data is not None:
             bar_time, opens, highs, lows, closes = data
-            self.time_idx.append(bar_time)
             self.opens = np.append(self.opens, opens.reshape((1, -1)), axis=0)
             self.highs = np.append(self.highs, highs.reshape((1, -1)), axis=0)
             self.lows = np.append(self.lows, lows.reshape((1, -1)), axis=0)
             self.closes = np.append(self.closes, closes.reshape((1, -1)), axis=0)
 
             # keep only lookback periods of data to save memory
-            if len(self.time_idx) > self.lookback:
-                self.time_idx.pop(0)
+            if len(self.opens) > self.lookback:
                 self.opens = self.opens[-self.lookback:]
                 self.highs = self.highs[-self.lookback:]
                 self.lows = self.lows[-self.lookback:]
                 self.closes = self.closes[-self.lookback:]
 
-            return self.time_idx, {'open': self.opens, 'high': self.highs, 'low': self.lows, 'close': self.closes}
+            return bar_time, {'open': self.opens, 'high': self.highs, 'low': self.lows, 'close': self.closes}
 
         return None
 
 
 class TimedBars:
     """
-    Synchronize bar data for all tickers
+    Aggregate bar data of tickers for pre-defined frequency, say minutely
     """
     # TODO: TimedBars assumes at least one update within a period. However, we shouldn't trade illiquid markets
 
@@ -143,7 +143,7 @@ class TimedBars:
         self.data = {ticker: Bar() for ticker in tickers}  # type: Dict[str, Bar]
 
         if freq == Freq.TICK:
-            self.delta = 0
+            self.delta = pd.Timedelta(0, 'second')
             self.unit = ''
         if freq == Freq.MINUTE:
             self.delta = pd.Timedelta(1, 'minute')
@@ -174,8 +174,9 @@ class TimedBars:
             """
         self.data[ticker].update(price)
 
-        if self.timestamp is None and self.unit != '':
-            self.timestamp = timestamp.floor(self.unit)  # use floor so that we can end this bar earlier
+        if self.timestamp is None:
+            # use floor so that we can end this bar earlier
+            self.timestamp = timestamp.floor(self.unit) if self.unit != '' else timestamp
         elif timestamp >= self.timestamp + self.delta:
             opens = np.zeros(self.N)
             highs = np.zeros(self.N)
@@ -185,8 +186,7 @@ class TimedBars:
             for idx, tic in enumerate(self.tickers):
                 opens[idx], highs[idx], lows[idx], closes[idx] = self.data[tic].clear()
 
-            if self.unit != '':
-                self.timestamp = timestamp.floor(self.unit)
+            self.timestamp = timestamp.floor(self.unit) if self.unit != '' else timestamp
             return self.timestamp, opens, highs, lows, closes
 
         return None
