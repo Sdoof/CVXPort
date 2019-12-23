@@ -29,7 +29,7 @@ class DataObject(abc.ABC):
 
     @abc.abstractmethod
     async def __call__(self) -> AsyncGenerator[Tuple[pd.Timestamp, Dict[str, np.ndarray]], None]:
-        pass
+        yield
 
 
 class MT4DataObject(DataObject):

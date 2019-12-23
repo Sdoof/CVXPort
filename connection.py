@@ -33,13 +33,15 @@ async def sender():
     out_socket = context.socket(zmq.PUSH)
     out_socket.connect('tcp://localhost:32768')
 
-    # await out_socket.send_string(format_order(**{'action': 'OPEN'}))
-    await out_socket.send_string(format_order(**{'action': 'CLOSE_MAGIC'}))
+    await out_socket.send_string(format_order(**{'action': 'OPEN'}))
+    # await out_socket.send_string(format_order(**{'action': 'CLOSE_MAGIC'}))
 
-    for i in range(10):
-        await out_socket.send_string(format_order(**{'action': 'GET_OPEN_TRADES'}))
+    # for i in range(1):
+    #     await out_socket.send_string(format_order(**{'action': 'GET_OPEN_TRADES'}))
 
-    await out_socket.send_string(format_order(**{'action': 'CLOSE_ALL_MAGIC'}))
+    print('im here')
+    # await out_socket.send_string(format_order(**{'action': 'CLOSE_ALL'}))
+    # print('im here now')
 
 
 def format_order(action='OPEN', order_type=0, symbol='EURUSD', price=0.0, sl=50, tp=50, comment="Python-to-MT",
@@ -51,4 +53,4 @@ async def main():
     await asyncio.gather(receiver2(1), sender())
 
 if __name__ == '__main__':
-    asyncio.run(receiver())
+    asyncio.run(main())

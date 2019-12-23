@@ -1,37 +1,48 @@
 
-import zmq.asyncio as azmq
-import zmq
+from ibapi.client import EClient
+from ibapi.wrapper import EWrapper
+from ibapi.utils import iswrapper
+from ibapi.common import TickerId
+from threading import Thread
+from datetime import datetime
 import asyncio
+import time
 
 
-async def client():
-    context = azmq.Context()
-    socket = context.socket(zmq.SUB)
-    socket.connect('tcp://127.0.0.1:5557')
-    socket.setsockopt_string(zmq.SUBSCRIBE, 'usd')
+class SimpleClient(EWrapper, EClient):
+    def __init__(self, ip, port, id):
+        EWrapper.__init__(self)
+        EClient.__init__(self, self)
 
-    for x in range(5):
-        msg = await socket.recv_string()
-        print(f'[client]    {msg}')
+        self.connect(ip, port, id)
+        # t = Thread(target=self.run)
+        # t.start()
+        asyncio.run(self.my_run())
+
+    async def my_run(self):
+        print('done')
+        await asyncio.sleep(0)
+
+    async def my_actions(self):
+        self.reqCurrentTime()
+        await asyncio.sleep(0)
+
+    @iswrapper
+    def currentTime(self, time:int):
+        t = datetime.fromtimestamp(time)
+        print(f'Current time: {t}')
+
+    @iswrapper
+    def error(self, reqId:TickerId, errorCode:int, errorString:str):
+        print(f'Error {errorCode}: {errorString}')
 
 
-async def server():
-    context = azmq.Context()
-    socket = context.socket(zmq.PUB)
-    socket.bind('tcp://127.0.0.1:5557')
-
-    await asyncio.sleep(0.8)
-    print('server starts')
-    for x in range(10):
-        await socket.send_string(f'usd {x}')
-        print(f'[server]    {x}')
-        await asyncio.sleep(1e-5)
-    print('server finishes')
-
-
-async def main():
-    await asyncio.gather(client(), server())
+def main():
+    client = SimpleClient('127.0.0.1', 7497, 0)
+    client.reqCurrentTime()
+    time.sleep(0.5)
+    client.disconnect()
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()

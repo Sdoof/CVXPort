@@ -2,12 +2,14 @@
 import abc
 import asyncio
 import numpy as np
+import zmq
+import zmq.asyncio as azmq
 from .data import DataObject
 from .strategy import Strategy
 
 
 class Executor(abc.ABC):
-    def __init__(self, strategy: Strategy, data: DataObject, data_params: dict):
+    def __init__(self, strategy: Strategy, data: DataObject):
         self.strategy = strategy
         self.data = data
         self.data.set_params(strategy.freq, strategy.lookback)  # must set up these before using DataObject
@@ -18,7 +20,7 @@ class Executor(abc.ABC):
 
     # ==================== To Override ====================
     @abc.abstractmethod
-    async def _execute_position(self, shares) -> dict:
+    async def _execute_order(self, shares: np.ndarray) -> dict:
         """
         Execute orders as specified per "shares"
 
@@ -77,3 +79,28 @@ class Executor(abc.ABC):
         self.info_daemon = self._process_execution_info()  # get handle so that we can cancel the coroutine later
         # _process_request is the main controller. no need for handle
         await asyncio.gather(self._process_request(), self.strategy_daemon, self.info_daemon)
+
+
+class MT4Executor(Executor):
+    def __init__(self, strategy: Strategy, data: DataObject, in_port, out_port):
+        super(MT4Executor, self).__init__(strategy, data)
+
+        self.tickers = data.tickers
+
+        self.context = azmq.Context()
+        self.in_socket = self.context.socket(zmq.PULL)
+        self.in_socket.connect(f'tcp://127.0.0.1:{in_port}')
+        self.out_socket = self.context.socket(zmq.PUSH)
+        self.out_socket.connect(f'tcp://127.0.0.1:{out_port}')
+
+    async def _execute_order(self, shares: np.ndarray) -> dict:
+        for ticker, share in zip(self.tickers, shares):
+            if abs(share) >= 1:
+                order = ''
+                await self.out_socket.send_string(order)
+                # TODO: this may
+                reply = await eval(self.in_socket.recv_string())
+
+        for _ in range(len(shares)):
+            # TODO: not finished
+            pass
