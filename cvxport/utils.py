@@ -2,6 +2,9 @@
 import pandas as pd
 import time
 import plotly.graph_objs as go
+from timeit import timeit
+import itertools
+from typing import Iterable
 
 
 def get_prices(tickers, root_dir, start_date=None, end_date=None) -> dict:
@@ -79,3 +82,20 @@ def get_risk_contribution(df: pd.DataFrame, weights, lookback=90):
     w = weights.reshape(-1, n_col, 1)
     marginal_rc = (cov * w).sum(axis=1)
     return pd.DataFrame(marginal_rc * weights, index=df.index, columns=df.columns).dropna()
+
+
+# ==================== Data Structure Operation ====================
+def flatten(iterable: Iterable):
+    return list(itertools.chain(*iterable))
+
+
+def unique(iterable: Iterable):
+    return list(set(iterable))
+
+
+if __name__ == '__main__':
+    # for testing performance
+    print('start')
+    t = timeit('flatten([list(range(10000)), list(range(10000)), list(range(10000))])',
+               setup="from __main__ import flatten", number=2000)
+    print(t)
