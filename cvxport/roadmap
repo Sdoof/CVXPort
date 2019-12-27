@@ -1,0 +1,9 @@
+1. data server - IB
+2. Better heartbeat handling - register / exit / lost connection - or change the whole mechanism as "connection"
+3. improve controller http
+4. error handling with asyncio?
+5. run baseline strategy live
+6. better performance recording / analysis
+7. if need to write pullin code multiple times. why not build a new socket class to wrap it up?
+
+Check Asyncio notes in Risk Premia Parity in OneNote

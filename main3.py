@@ -1,53 +1,37 @@
-
-import zmq
-import zmq.asyncio as azmq
+import threading
 import asyncio
+import zmq
+from cvxport.worker import SatelliteWorker, service, WorkerException
 
 
-channel1 = 'tcp://127.0.0.1:12345'
-channel11 = 'tcp://127.0.0.1:12347'
-channel2 = 'tcp://127.0.0.1:12346'
-
-
-async def worker(id):
-    # await asyncio.sleep(0.5)
-    print(f'[Worker {id}] started')
-
-    context = azmq.Context()
-    out_socket = context.socket(zmq.PUSH)
-    out_socket.connect(channel1)
-
-    while True:
-        await out_socket.send_string(f'{id}')
-        print(f'worker {id} send {id}')
+class MockWorker(SatelliteWorker):
+    @service()
+    async def shutdown(self):
         await asyncio.sleep(3)
+        raise WorkerException('Timesup')
 
 
-async def newcomer():
-    await asyncio.sleep(0.5)
-    print('[Newcomer] started')
-    context = azmq.Context()
-
-    in_socket = context.socket(zmq.PULL)
-    in_socket.bind(channel1)
-
-    while True:
-        msg = await in_socket.recv_string()
-        print(f'[Newcomer] get {msg}')
-
-import inspect
-
-def main():
-    workers = [worker(i) for i in range(3)]
-    comer = newcomer()
-    print(inspect.iscoroutine(comer))
-    print(inspect.iscoroutinefunction(newcomer))
-    print(newcomer)
-    return workers, comer
-    # await asyncio.gather(comer, *workers)
+worker = MockWorker('test', 5)
+worker.heartbeat_interval = 0.5
+messages = []
 
 
-if __name__ == '__main__':
-    # asyncio.run(main())
-    res = main()
-    print('here')
+def mock_controller():
+    context = zmq.Context()
+    # noinspection PyUnresolvedReferences
+    socket = context.socket(zmq.REP)
+    socket.bind(f'tcp://127.0.0.1:{worker.controller_port}')
+    for _ in range(1):
+        messages.append(socket.recv_string())
+        socket.send_string(f'{worker.controller_port + 1}')
+
+
+t = threading.Thread(target=mock_controller)
+t.start()
+try:
+    asyncio.run(worker._run())
+except Exception as e:
+    print(str(e))
+
+t.join()
+

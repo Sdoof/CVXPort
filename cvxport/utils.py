@@ -4,7 +4,10 @@ import time
 import plotly.graph_objs as go
 from timeit import timeit
 import itertools
+import pathlib
 from typing import Iterable
+import zmq
+import zmq.asyncio as azmq
 
 
 def get_prices(tickers, root_dir, start_date=None, end_date=None) -> dict:
@@ -91,6 +94,33 @@ def flatten(iterable: Iterable):
 
 def unique(iterable: Iterable):
     return list(set(iterable))
+
+
+# ==================== IO Operations ====================
+def get_next_filename(pathname, file_prefix, extension='log'):
+    path = pathlib.Path(pathname)
+    if not path.exists():
+        path.mkdir(parents=False)
+
+    existing_files = [f.name for f in path.iterdir() if f.is_file() and f.name.startswith(file_prefix)]
+    if len(existing_files) == 0:
+        return (path / f'{file_prefix}_001.{extension}').as_posix()
+    else:
+        last_file = max(existing_files)
+        next_index = int(last_file.split('.')[0].split('_')[1]) + 1
+        return (path / f'{file_prefix}_{next_index:03d}.{extension}').as_posix()
+
+
+# ==================== Socket ====================
+async def recv_string(socket: azmq.Socket, timeout: int, exception: Exception):
+    # TODO: check if making poller a global singleton (with deregister) speed up execution
+    poller = azmq.Poller()
+    # noinspection PyUnresolvedReferences
+    poller.register(socket, zmq.POLLIN)
+    ready = dict(await poller.poll(timeout))
+    if socket not in ready:
+        raise exception
+    return await socket.recv_string()
 
 
 if __name__ == '__main__':
