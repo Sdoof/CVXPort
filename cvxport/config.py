@@ -12,7 +12,7 @@ Config = {
     'heartbeat_interval': 10,
 
     # ---------- Controller ----------
-    'startup_wait_time': 5000,  # in milliseconds
+    'startup_wait_time': 5,  # in seconds
 
     # ---------- Logging ----------
     'log_level': logging.DEBUG,

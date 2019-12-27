@@ -5,16 +5,15 @@ import time
 import threading
 import zmq
 
-from cvxport.worker import SatelliteWorker, service, WorkerException
+from cvxport.worker import SatelliteWorker, service, JobError
 
 
 # mock class
 class MockWorker(SatelliteWorker):
     @service()
     async def shutdown(self):
-        # await asyncio.sleep(3)
-        print('yes here!')
-        raise WorkerException('Timesup')
+        await asyncio.sleep(3)
+        raise JobError('Timesup')
 
 
 class TestSatelliteWorker(unittest.TestCase):
@@ -23,13 +22,13 @@ class TestSatelliteWorker(unittest.TestCase):
         Test if controller registration will time out as expected
         """
         worker = MockWorker('test', 5)
-        worker.wait_time = 1000  # 1 second
+        worker.wait_time = 1  # 1 second
 
         start = time.time()
 
-        with self.assertRaises(WorkerException) as cm:
+        with self.assertRaises(JobError) as cm:
             asyncio.run(worker._run())
-        self.assertEqual(str(cm.exception), 'Registration with controller timeout')
+        self.assertEqual(str(cm.exception), 'Controller registration timeout')
 
         duration = time.time() - start
         # since we set the wait time to be 1 second, the worker should return between 1 to 1.2 seconds
@@ -56,7 +55,7 @@ class TestSatelliteWorker(unittest.TestCase):
 
         start = time.time()
 
-        with self.assertRaises(WorkerException) as cm:
+        with self.assertRaises(JobError) as cm:
             asyncio.run(worker._run())
         self.assertEqual(str(cm.exception), 'test already registered')
 
@@ -68,6 +67,8 @@ class TestSatelliteWorker(unittest.TestCase):
     def test_registration_and_heartbeat(self):
         worker = MockWorker('test', 5)
         worker.heartbeat_interval = 0.5
+        worker.wait_time = 0.2
+
         messages = []
 
         def mock_controller():
@@ -83,17 +84,15 @@ class TestSatelliteWorker(unittest.TestCase):
         t.start()
         start = time.time()
 
-        # noinspection PyBroadException
-        with self.assertRaises(WorkerException) as cm:
+        with self.assertRaises(JobError) as cm:
             asyncio.run(worker._run())
-        print(messages)
         self.assertEqual(str(cm.exception), 'Controller unreachable')
 
         duration = time.time() - start
         t.join()
-
-        self.assertGreater(duration, 2)
-        self.assertLess(duration, 2.5)
+        self.assertGreater(duration, 2)  # 4 heartbeats take 2s
+        self.assertLess(duration, 2.5)  # wait time add 0.2, so the process should take around 2.2s
+        self.assertListEqual(messages, ['test|5', 'test', 'test', 'test', 'test'])
 
 
 if __name__ == '__main__':

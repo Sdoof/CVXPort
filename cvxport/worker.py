@@ -37,7 +37,7 @@ def service(**sockets):
 
 
 # ==================== Exceptions ====================
-class WorkerException(Exception):
+class JobError(Exception):
     pass
 
 
@@ -67,8 +67,8 @@ class Worker(abc.ABC):
         # noinspection PyBroadException
         try:
             asyncio.run(self._run())
-        except WorkerException as e:
-            self.logger.warning(e)  # WorkerException is not unexpected errors.
+        except JobError as e:
+            self.logger.warning(e)  # JobError is not unexpected errors.
         except Exception:
             self.logger.exception('Unexpected Error!')
 
@@ -77,13 +77,23 @@ class Worker(abc.ABC):
         """
         We only need error wrapper with repetitive jobs because one-time task is usually job that must succeed
         For one-time task, we should cascade the error
+
+        We require coroutine function here because we can't reuse awaited coroutine in the loop
+        To release the need of passing in coroutine argument, we use closure
+
+        :param awaitable: coroutine function
+        :return:
         """
         while True:
             # noinspection PyBroadException
             try:
                 await awaitable()
-            except Exception:
-                self.logger.exception('Unexpected Exception!')
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                # This includes JobError.
+                # The awaitable should handle other exceptions. That's why we choose to break the loop here
+                raise e
 
     # ==================== Private ====================
     async def _run(self):
@@ -165,10 +175,10 @@ class SatelliteWorker(Worker):
     @startup(socket='controller_port|REQ')
     async def register(self, socket: azmq.Socket):
         await socket.send_string(f'{self.name}|{self.num_ports}')
-        port = await utils.recv_string(socket, self.wait_time, WorkerException('Registration with controller timeout'))
+        port = await utils.wait_for(socket.recv_string(), self.wait_time, JobError('Controller registration timeout'))
         self.start_port = int(port)
         if self.start_port < 0:
-            raise WorkerException(f'{self.name} already registered')
+            raise JobError(f'{self.name} already registered')
 
     # ==================== Services ====================
     @service(socket='controller_port|REQ')
@@ -176,7 +186,7 @@ class SatelliteWorker(Worker):
 
         async def core():
             await socket.send_string(self.name)
-            await utils.recv_string(socket, self.wait_time, WorkerException('Controller unreachable'))
+            await utils.wait_for(socket.recv_string(), self.wait_time, JobError('Controller unreachable'))
             await asyncio.sleep(self.heartbeat_interval)
 
         await self.error_wrap(core)

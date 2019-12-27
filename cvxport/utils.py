@@ -5,9 +5,10 @@ import plotly.graph_objs as go
 from timeit import timeit
 import itertools
 import pathlib
-from typing import Iterable
+from typing import Iterable, Awaitable
 import zmq
 import zmq.asyncio as azmq
+import asyncio
 
 
 def get_prices(tickers, root_dir, start_date=None, end_date=None) -> dict:
@@ -94,6 +95,19 @@ def flatten(iterable: Iterable):
 
 def unique(iterable: Iterable):
     return list(set(iterable))
+
+
+# ==================== IO Operations ====================
+async def wait_for(awaitable: Awaitable, wait_time: float, exception: Exception):
+    """
+    :param awaitable: coroutine, not coroutine function
+    :param wait_time: in seconds
+    :param exception: exception to be raised
+    """
+    try:
+        return await asyncio.wait_for(awaitable, wait_time)
+    except asyncio.TimeoutError:
+        raise exception
 
 
 # ==================== IO Operations ====================
