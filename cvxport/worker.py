@@ -81,11 +81,16 @@ class Worker(abc.ABC):
         'REP': zmq.REP,
     }
 
+    stage_map = {
+        1: 'Execute start-up sequences',
+        2: 'Worker comes online'
+    }
+
     def __init__(self, name):
         self.name = name
         self.logger = Logger(name)
         self.port_map = {}
-        self.logger.info(f'Starting {name} ...')
+        self.logger.info(f'Starting "{name}" ...')
 
     def run(self):
         # noinspection PyBroadException
@@ -110,6 +115,8 @@ class Worker(abc.ABC):
 
         ordered_groups = sorted(job_groups.keys())
         for group in ordered_groups:
+            self.logger.info('')
+            self.logger.info(f'========== {Worker.stage_map[group]} ==========')  # log stage
             jobs_per_group = job_groups[group]
 
             # get all socket specs
@@ -139,10 +146,10 @@ class Worker(abc.ABC):
                     # default bind / connect classifications. May need extension in the future?
                     if protocol in ['PUSH', 'SUB', 'REQ']:
                         socket.connect(address)
-                        print(f'{spec}: connect {address}')
+                        self.logger.info(f'{spec}: contacting {address}')
                     elif protocol in ['PULL', 'PUB', 'REP']:
                         socket.bind(address)
-                        print(f'{spec}: bind {address}')
+                        self.logger.info(f'{spec}: listening on {address}')
                     else:
                         raise ValueError(f'Protocol {protocol} is not in any bind/connect category')
 
@@ -184,7 +191,7 @@ class SatelliteWorker(Worker):
         # figure out number of ports need to be requested
         jobs = [job for _, job in inspect.getmembers(self, inspect.ismethod) if getattr(job, '__job__', 0) > 1]
         names = [s.split('|')[0] for s in utils.flatten(list(job.__sockets__.values()) for job in jobs)]
-        minimal_names = [name for name in utils.unique(names) if name not in self.port_map]
+        minimal_names = sorted([name for name in utils.unique(names) if name not in self.port_map])
         num_ports = len(minimal_names)
 
         # request for ports

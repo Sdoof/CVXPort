@@ -36,6 +36,7 @@ class Controller(Worker):
         """
         1. handle registration
         2. update heartbeat
+        # TODO: should implement port recycling in the future
         """
         raw = await socket.recv_string()
         msg = raw.split('|')  # either "name|num_ports" or "name"

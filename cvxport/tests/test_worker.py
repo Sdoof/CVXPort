@@ -9,11 +9,21 @@ from cvxport.worker import SatelliteWorker, service, schedulable, JobError
 
 
 # mock class
-class MockWorker(SatelliteWorker):
+class MockedWorker(SatelliteWorker):
     @schedulable()
     async def shutdown(self):
         await asyncio.sleep(3)
         raise JobError("Time's up")
+
+
+class MockedWorker2(MockedWorker):
+    @schedulable(socket='dummy_port|REP')
+    async def dummy_job(self, socket):
+        await asyncio.sleep(0)
+
+    @service(socket='dummy_port2|REP')
+    async def dummy_job2(self, socket):
+        await asyncio.sleep(0)
 
 
 class TestSatelliteWorker(unittest.TestCase):
@@ -21,7 +31,7 @@ class TestSatelliteWorker(unittest.TestCase):
         """
         Test if controller registration will time out as expected
         """
-        worker = MockWorker('test')
+        worker = MockedWorker('test')
         worker.wait_time = 1.5  # 1.5 second
 
         start = time.time()
@@ -39,7 +49,7 @@ class TestSatelliteWorker(unittest.TestCase):
         """
         Test if controller registration is rejected
         """
-        worker = MockWorker('test')
+        worker = MockedWorker('test')
 
         def mock_controller():
             context = zmq.Context()
@@ -65,7 +75,7 @@ class TestSatelliteWorker(unittest.TestCase):
         self.assertLess(duration, 0.5)
 
     def test_registration_and_heartbeat(self):
-        worker = MockWorker('test')
+        worker = MockedWorker2('test')
         worker.heartbeat_interval = 0.5
         worker.wait_time = 0.2
 
@@ -92,10 +102,11 @@ class TestSatelliteWorker(unittest.TestCase):
         t.join()
         self.assertGreater(duration, 2)  # 4 heartbeats take 2s
         self.assertLess(duration, 2.5)  # wait time add 0.2, so the process should take around 2.2s
-        self.assertListEqual(messages, ['test|0', 'test', 'test', 'test', 'test'])
+        self.assertListEqual(messages, ['test|2', 'test', 'test', 'test', 'test'])
+        self.assertDictEqual(worker.port_map, {'controller_port': 6002, 'dummy_port': 6003, 'dummy_port2': 6004})
 
     def test_registration_lost(self):
-        worker = MockWorker('test')
+        worker = MockedWorker('test')
         worker.heartbeat_interval = 0.5
         worker.wait_time = 0.2
 

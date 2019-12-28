@@ -17,14 +17,22 @@ class Logger:
         path = pathlib.Path(Config['log_path']) / today
         filename = utils.get_next_filename(pathname=path, file_prefix=name)
 
-        # configure log output
-        print(filename)
-        handler = logging.FileHandler(filename=filename)
-        handler.setLevel(Config['log_level'])
-        handler.setFormatter(logging.Formatter(fmt=Config['log_format'], datefmt=Config['log_date_format']))
-
+        # get logger and formatter
         self.logger = logging.getLogger(name)
         self.logger.setLevel(Config['log_level'])
+        formatter = logging.Formatter(fmt=Config['log_format'], datefmt=Config['log_date_format'])
+
+        # set up stream handler
+        handler = logging.StreamHandler()
+        handler.setLevel(Config['log_level'])
+        handler.setFormatter(formatter)
+        self.logger.addHandler(handler)
+
+        # configure log output
+        self.logger.info(f'Log file: {filename}')
+        handler = logging.FileHandler(filename=filename)
+        handler.setLevel(Config['log_level'])
+        handler.setFormatter(formatter)
         self.logger.addHandler(handler)
 
     def debug(self, msg):
