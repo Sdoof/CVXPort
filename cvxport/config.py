@@ -9,6 +9,7 @@ Config = {
     # ---------- Controller ----------
     'controller_http_port': 6001,
     'controller_port': 6002,
+    'starting_port': 6003,
     'heartbeat_interval': 10,
 
     # ---------- Controller ----------

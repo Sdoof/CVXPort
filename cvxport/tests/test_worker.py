@@ -5,15 +5,15 @@ import time
 import threading
 import zmq
 
-from cvxport.worker import SatelliteWorker, service, JobError
+from cvxport.worker import SatelliteWorker, service, schedulable, JobError
 
 
 # mock class
 class MockWorker(SatelliteWorker):
-    @service()
+    @schedulable()
     async def shutdown(self):
         await asyncio.sleep(3)
-        raise JobError('Timesup')
+        raise JobError("Time's up")
 
 
 class TestSatelliteWorker(unittest.TestCase):
@@ -93,6 +93,30 @@ class TestSatelliteWorker(unittest.TestCase):
         self.assertGreater(duration, 2)  # 4 heartbeats take 2s
         self.assertLess(duration, 2.5)  # wait time add 0.2, so the process should take around 2.2s
         self.assertListEqual(messages, ['test|5', 'test', 'test', 'test', 'test'])
+
+    def test_registration_lost(self):
+        worker = MockWorker('test', 5)
+        worker.heartbeat_interval = 0.5
+        worker.wait_time = 0.2
+
+        def mock_controller():
+            context = zmq.Context()
+            # noinspection PyUnresolvedReferences
+            socket = context.socket(zmq.REP)
+            socket.bind(f'tcp://127.0.0.1:{worker.controller_port}')
+            socket.recv_string()
+            socket.send_string(f'{1234}')  # fake port
+            socket.recv_string()
+            socket.send_string('-1')  # mock registration lost
+
+        t = threading.Thread(target=mock_controller)
+        t.start()
+
+        with self.assertRaises(JobError) as cm:
+            asyncio.run(worker._run())
+        self.assertEqual(str(cm.exception), 'Controller registration lost')
+
+        t.join()
 
 
 if __name__ == '__main__':

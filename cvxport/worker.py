@@ -13,7 +13,7 @@ from cvxport.basic_logging import Logger
 
 # ==================== Decorators ====================
 def generate_wrapper(priority: int, sockets):
-    def wrapper(functor: Awaitable) -> Awaitable:
+    def wrapper(functor: Callable) -> Callable:
         functor.__job__ = priority
         functor.__sockets__ = sockets
         return functor
@@ -27,13 +27,36 @@ def startup(**sockets):
     return generate_wrapper(1, sockets)
 
 
+def schedulable(**sockets):
+    """
+    To label the awaitable as job that runs after start-up jobs
+    This provides a blank canvas to allow
+    """
+    # TODO: decide if we should add exception handling later
+    return generate_wrapper(2, sockets)
+
+
 def service(**sockets):
     """
-    To label the awaitable as job with error handling
-
-    Doesn't include loop here because that'll be too specific. For example, Executor won't fit into this pattern
+    To label the awaitable as repetitive job with error handling
     """
-    return generate_wrapper(2, sockets)
+    def wrapper(functor: Callable) -> Callable:
+        async def loop_wrapper(self, **kwargs):
+            while True:
+                # noinspection PyBroadException
+                try:
+                    await functor(self, **kwargs)
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    # This includes JobError.
+                    # The awaitable should handle other exceptions. That's why we choose to break the loop here
+                    raise e
+
+        loop_wrapper.__job__ = 2
+        loop_wrapper.__sockets__ = sockets
+        return loop_wrapper
+    return wrapper
 
 
 # ==================== Exceptions ====================
@@ -61,7 +84,6 @@ class Worker(abc.ABC):
     def __init__(self, name):
         self.name = name
         self.logger = Logger(name)
-        self.start_port = None
 
     def run(self):
         # noinspection PyBroadException
@@ -73,29 +95,6 @@ class Worker(abc.ABC):
             self.logger.exception('Unexpected Error!')
 
     # ==================== Helper ====================
-    async def error_wrap(self, awaitable: Callable[[], Awaitable]):
-        """
-        We only need error wrapper with repetitive jobs because one-time task is usually job that must succeed
-        For one-time task, we should cascade the error
-
-        We require coroutine function here because we can't reuse awaited coroutine in the loop
-        To release the need of passing in coroutine argument, we use closure
-
-        :param awaitable: coroutine function
-        :return:
-        """
-        while True:
-            # noinspection PyBroadException
-            try:
-                await awaitable()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                # This includes JobError.
-                # The awaitable should handle other exceptions. That's why we choose to break the loop here
-                raise e
-
-    # ==================== Private ====================
     async def _run(self):
         """
         asyncio context and sockets have to be set up within a coroutine. Otherwise, they won't function as expected
@@ -145,14 +144,18 @@ class Worker(abc.ABC):
         for job in job_list:
             job_groups.setdefault(job.__job__, []).append(job)  # group jobs by priority
 
-        groups = sorted(job_groups.keys())
-        for group in groups:
-            jobs_per_group = job_groups[group]
-            awaitables = []
-            for job in jobs_per_group:
-                inputs = {k: sockets[v] for k, v in job.__sockets__.items()}
-                awaitables.append(job(**inputs))
-            await asyncio.gather(*awaitables)
+        try:
+            groups = sorted(job_groups.keys())
+            for group in groups:
+                jobs_per_group = job_groups[group]
+                awaitables = []
+                for job in jobs_per_group:
+                    inputs = {k: sockets[v] for k, v in job.__sockets__.items()}
+                    awaitables.append(job(**inputs))
+                await asyncio.gather(*awaitables)
+        finally:
+            for socket in sockets.values():
+                socket.close()
 
 
 class SatelliteWorker(Worker):
@@ -170,23 +173,22 @@ class SatelliteWorker(Worker):
 
         # set up ports
         self.controller_port = Config['controller_port']
+        self.starting_port = None
 
     # ==================== Startup ====================
     @startup(socket='controller_port|REQ')
     async def register(self, socket: azmq.Socket):
         await socket.send_string(f'{self.name}|{self.num_ports}')
         port = await utils.wait_for(socket.recv_string(), self.wait_time, JobError('Controller registration timeout'))
-        self.start_port = int(port)
-        if self.start_port < 0:
+        self.starting_port = int(port)
+        if self.starting_port < 0:
             raise JobError(f'{self.name} already registered')
 
     # ==================== Services ====================
     @service(socket='controller_port|REQ')
     async def emit_heartbeat(self, socket: azmq.Socket):
-
-        async def core():
-            await socket.send_string(self.name)
-            await utils.wait_for(socket.recv_string(), self.wait_time, JobError('Controller unreachable'))
-            await asyncio.sleep(self.heartbeat_interval)
-
-        await self.error_wrap(core)
+        await socket.send_string(self.name)
+        ind = int(await utils.wait_for(socket.recv_string(), self.wait_time, JobError('Controller unreachable')))
+        if ind < 0:
+            raise JobError('Controller registration lost')
+        await asyncio.sleep(self.heartbeat_interval)
