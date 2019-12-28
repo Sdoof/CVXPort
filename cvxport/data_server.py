@@ -10,10 +10,9 @@ class DataServer(SatelliteWorker):
     2.
     """
     def __init__(self, name):
-        super(DataServer, self).__init__(name)
-        self.subscription_port = 1234
+        super(DataServer, self).__init__(name, 3)
 
-    @service(socket='subscription_port|REP')
+    @service(socket='|REP')
     async def process_symbol_subscription(self, in_socket: azmq.Socket, out_socket: azmq.Socket):
         while True:
             symbol = await in_socket.recv_string()  # type: str

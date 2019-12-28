@@ -18,15 +18,17 @@ class Controller(Worker):
     """
     def __init__(self, name='Controller'):
         super(Controller, self).__init__(name)
-        self.controller_port = Config['controller_port']
+
         # add 0.5 to make sure all satellites have enough time to send heartbeat
         self.heartbeat_interval = Config['heartbeat_interval'] + 0.5
-        self.http_port = Config['controller_http_port']
-        self.registry = {}
         self.current_usable_port = Config['starting_port']  # ports to be assigned to workers
 
-        # print out
-        self.logger.info('Controller online')
+        # ports
+        self.port_map = {
+            'http_port': Config['controller_http_port'],
+            'controller_port': Config['controller_port'],
+        }
+        self.registry = {}
 
     # ==================== Heartbeat ====================
     @service(socket='controller_port|REP')
@@ -93,7 +95,7 @@ class Controller(Worker):
         app.add_routes([web.get('/', show)])
 
         # noinspection PyProtectedMember
-        await web._run_app(app, host='localhost', port=self.http_port)
+        await web._run_app(app, host='localhost', port=self.port_map['http_port'])
 
     # ==================== Data Server ====================
     # @service(in_socket='data_port|PULL')

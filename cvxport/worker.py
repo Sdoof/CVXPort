@@ -84,6 +84,8 @@ class Worker(abc.ABC):
     def __init__(self, name):
         self.name = name
         self.logger = Logger(name)
+        self.port_map = {}
+        self.logger.info(f'Starting {name} ...')
 
     def run(self):
         # noinspection PyBroadException
@@ -100,62 +102,65 @@ class Worker(abc.ABC):
         asyncio context and sockets have to be set up within a coroutine. Otherwise, they won't function as expected
         Also, if we declare asyncio context outside a coroutine, the program won't exit smoothly
         """
-        # ---------- Retrieve and check jobs (services) ----------
-        job_list = [job for _, job in inspect.getmembers(self, inspect.ismethod) if getattr(job, '__job__', False)]
-        socket_list = utils.unique(utils.flatten(list(job.__sockets__.values()) for job in job_list))
-
-        # check socket specification
-        minimal_sockets = utils.unique(spec.split('|')[0] for spec in socket_list)
-        if len(minimal_sockets) < len(socket_list):
-            raise ValueError(f'Duplicated socket specification: {socket_list}')
-
-        # ---------- Initialize sockets ----------
-        context = azmq.Context()
-        sockets = {}
-
-        for spec in socket_list:
-            port_name, protocol = spec.split('|')
-            port = getattr(self, port_name, -1)
-            if port > 0:
-                socket = context.socket(Worker.protocol_map[protocol])
-                address = f'tcp://127.0.0.1:{port}'
-
-                if protocol == 'REQ':
-                    # noinspection PyUnresolvedReferences
-                    socket.setsockopt(zmq.LINGER, 0)
-
-                # default bind / connect classifications. May need extension in the future?
-                if protocol in ['PUSH', 'SUB', 'REQ']:
-                    socket.connect(address)
-                    print(f'{spec}: connect {address}')
-                elif protocol in ['PULL', 'PUB', 'REP']:
-                    socket.bind(address)
-                    print(f'{spec}: bind {address}')
-                else:
-                    raise ValueError(f'Protocol {protocol} is not in any bind/connect category')
-
-                sockets[spec] = socket
-
-            else:
-                raise ValueError(f'Port {port_name} not defined')
-
-        # ---------- Start jobs ----------
+        # ---------- Retrieve all schedulable jobs and run according to priorities ----------
+        all_jobs = [job for _, job in inspect.getmembers(self, inspect.ismethod) if getattr(job, '__job__', False)]
         job_groups = {}
-        for job in job_list:
+        for job in all_jobs:
             job_groups.setdefault(job.__job__, []).append(job)  # group jobs by priority
 
-        try:
-            groups = sorted(job_groups.keys())
-            for group in groups:
-                jobs_per_group = job_groups[group]
+        ordered_groups = sorted(job_groups.keys())
+        for group in ordered_groups:
+            jobs_per_group = job_groups[group]
+
+            # get all socket specs
+            socket_list = utils.unique(utils.flatten(list(job.__sockets__.values()) for job in jobs_per_group))
+
+            # check if specs are unique
+            minimal_sockets = utils.unique(spec.split('|')[0] for spec in socket_list)
+            if len(minimal_sockets) < len(socket_list):
+                raise ValueError(f'Duplicated socket specification: {socket_list}')
+
+            # ---------- Initialize sockets ----------
+            context = azmq.Context()
+            sockets = {}
+
+            for spec in socket_list:
+                port_name, protocol = spec.split('|')
+                port = self.port_map.get(port_name, None)
+                if port is not None:
+                    socket = context.socket(Worker.protocol_map[protocol])
+                    address = f'tcp://127.0.0.1:{port}'
+
+                    # this is required for using timeout on REQ. Otherwise, socket blocks forever
+                    if protocol == 'REQ':
+                        # noinspection PyUnresolvedReferences
+                        socket.setsockopt(zmq.LINGER, 0)
+
+                    # default bind / connect classifications. May need extension in the future?
+                    if protocol in ['PUSH', 'SUB', 'REQ']:
+                        socket.connect(address)
+                        print(f'{spec}: connect {address}')
+                    elif protocol in ['PULL', 'PUB', 'REP']:
+                        socket.bind(address)
+                        print(f'{spec}: bind {address}')
+                    else:
+                        raise ValueError(f'Protocol {protocol} is not in any bind/connect category')
+
+                    sockets[spec] = socket
+
+                else:
+                    raise ValueError(f'Port {port_name} not defined')
+
+            # ---------- Start jobs ----------
+            try:
                 awaitables = []
                 for job in jobs_per_group:
                     inputs = {k: sockets[v] for k, v in job.__sockets__.items()}
                     awaitables.append(job(**inputs))
                 await asyncio.gather(*awaitables)
-        finally:
-            for socket in sockets.values():
-                socket.close()
+            finally:
+                for socket in sockets.values():
+                    socket.close()
 
 
 class SatelliteWorker(Worker):
@@ -163,26 +168,36 @@ class SatelliteWorker(Worker):
     1. register with controller
     2. keep track of connection with controller
     """
-    def __init__(self, name: str, num_ports: int):
+    def __init__(self, name: str):
         super(SatelliteWorker, self).__init__(name)
-        self.num_ports = num_ports
         self.wait_time = Config['startup_wait_time']
 
         # make sure heartbeat is sent at least once between registry check
         self.heartbeat_interval = Config['heartbeat_interval'] - 1
 
         # set up ports
-        self.controller_port = Config['controller_port']
-        self.starting_port = None
+        self.port_map['controller_port'] = Config['controller_port']
 
     # ==================== Startup ====================
     @startup(socket='controller_port|REQ')
     async def register(self, socket: azmq.Socket):
-        await socket.send_string(f'{self.name}|{self.num_ports}')
+        # figure out number of ports need to be requested
+        jobs = [job for _, job in inspect.getmembers(self, inspect.ismethod) if getattr(job, '__job__', 0) > 1]
+        names = [s.split('|')[0] for s in utils.flatten(list(job.__sockets__.values()) for job in jobs)]
+        minimal_names = [name for name in utils.unique(names) if name not in self.port_map]
+        num_ports = len(minimal_names)
+
+        # request for ports
+        await socket.send_string(f'{self.name}|{num_ports}')
         port = await utils.wait_for(socket.recv_string(), self.wait_time, JobError('Controller registration timeout'))
-        self.starting_port = int(port)
-        if self.starting_port < 0:
+        starting_port = int(port)
+        if starting_port < 0:
             raise JobError(f'{self.name} already registered')
+
+        # assign port to socket
+        for name in minimal_names:
+            self.port_map[name] = starting_port
+            starting_port += 1
 
     # ==================== Services ====================
     @service(socket='controller_port|REQ')

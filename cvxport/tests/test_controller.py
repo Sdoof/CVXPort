@@ -35,7 +35,7 @@ class TestController(unittest.TestCase):
             context = zmq.Context()
             # noinspection PyUnresolvedReferences
             socket = context.socket(zmq.REQ)
-            socket.connect(f'tcp://127.0.0.1:{controller.controller_port}')
+            socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
             socket.send_string('worker1|3')
             results[0] = int(socket.recv_string())  # should get controller_port
             clock[0] = pd.Timestamp.now('EST')  # to check if registration of worker1 gets overridden
@@ -44,11 +44,11 @@ class TestController(unittest.TestCase):
             """
             proper worker without error. To check if starting port is moved
             """
-            time.sleep(0.5)  # so that worker1 will run before worker2
+            time.sleep(1)  # so that worker1 will run before worker2
             context = zmq.Context()
             # noinspection PyUnresolvedReferences
             socket = context.socket(zmq.REQ)
-            socket.connect(f'tcp://127.0.0.1:{controller.controller_port}')
+            socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
             socket.send_string('worker2|5')
             results[1] = int(socket.recv_string())  # should get controller_port + 3
 
@@ -60,7 +60,7 @@ class TestController(unittest.TestCase):
             context = zmq.Context()
             # noinspection PyUnresolvedReferences
             socket = context.socket(zmq.REQ)
-            socket.connect(f'tcp://127.0.0.1:{controller.controller_port}')
+            socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
             socket.send_string('worker1|3')
             results[2] = int(socket.recv_string())  # should get -1
 
@@ -71,7 +71,7 @@ class TestController(unittest.TestCase):
             context = zmq.Context()
             # noinspection PyUnresolvedReferences
             socket = context.socket(zmq.REQ)
-            socket.connect(f'tcp://127.0.0.1:{controller.controller_port}')
+            socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
             socket.send_string('worker4')
             results[3] = int(socket.recv_string())  # should get -1 because we didn't register
 
@@ -82,7 +82,7 @@ class TestController(unittest.TestCase):
             context = zmq.Context()
             # noinspection PyUnresolvedReferences
             socket = context.socket(zmq.REQ)
-            socket.connect(f'tcp://127.0.0.1:{controller.controller_port}')
+            socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
             socket.send_string('worker5|5|')
             results[4] = int(socket.recv_string())  # should get -1 because of format
 
@@ -110,7 +110,7 @@ class TestController(unittest.TestCase):
             context = zmq.Context()
             # noinspection PyUnresolvedReferences
             socket = context.socket(zmq.REQ)
-            socket.connect(f'tcp://127.0.0.1:{controller.controller_port}')
+            socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
 
             # register
             socket.send_string('worker1|3')
@@ -128,7 +128,7 @@ class TestController(unittest.TestCase):
             context = zmq.Context()
             # noinspection PyUnresolvedReferences
             socket = context.socket(zmq.REQ)
-            socket.connect(f'tcp://127.0.0.1:{controller.controller_port}')
+            socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
 
             # register
             socket.send_string('worker2|3')

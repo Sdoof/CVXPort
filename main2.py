@@ -1,17 +1,18 @@
 
-from aiohttp import web
-import asyncio
+import pystore as ps
+import pandas as pd
+
+from cvxport import Config
 
 
-async def hello(request):
-    return web.Response(text="Hello, Albert", )
+# ps.set_path(Config['pystore_path'])
+# store = ps.store('account')
+# collection = store.collection('test')
+# # collection.write('ib_ds', pd.DataFrame({'ticker': ['AAPL', 'TSLA']}), metadata={'source': 'manual'})
+# df = collection.item('ib_ds')
 
-app = web.Application()
-app.add_routes([web.get('/hello', hello)])
-
-
-async def main():
-    # noinspection PyProtectedMember
-    await asyncio.gather(web.run_app(app))
-
-asyncio.run(main())
+a = {'a': 1, 'b': 3}
+b = 0
+for v in a.values():
+    b += v
+print(b)

@@ -20,5 +20,8 @@ Config = {
     'log_path': 'C:/Users/Albert/PycharmProjects/CVXPort/logs',
     'log_timezone': 'EST',
     'log_format': '[%(asctime)s.%(msecs)d %(levelname)s] %(message)s',
-    'log_date_format': '%Y-%m-%d %H:%M:%S'
+    'log_date_format': '%Y-%m-%d %H:%M:%S',
+
+    # ---------- Data ----------
+    'pystore_path': 'C:/Users/Albert/PycharmProjects/CVXPort/pystore',
 }
