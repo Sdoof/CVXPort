@@ -6,6 +6,7 @@ import threading
 import zmq
 
 from cvxport.worker import SatelliteWorker, service, schedulable, JobError
+from cvxport import const
 
 
 # mock class
@@ -57,7 +58,7 @@ class TestSatelliteWorker(unittest.TestCase):
             socket = context.socket(zmq.REP)
             socket.bind(f'tcp://127.0.0.1:{worker.port_map["controller_port"]}')
             socket.recv_string()
-            socket.send_string('-1')
+            socket.send_string(str({'err': const.ErrorCode.AlreadyRegistered.value}))
 
         # start controller
         t = threading.Thread(target=mock_controller)
@@ -67,7 +68,7 @@ class TestSatelliteWorker(unittest.TestCase):
 
         with self.assertRaises(JobError) as cm:
             asyncio.run(worker._run())
-        self.assertEqual(str(cm.exception), 'test already registered')
+        self.assertEqual(str(cm.exception), 'AlreadyRegistered')
 
         duration = time.time() - start
         t.join()
@@ -78,6 +79,7 @@ class TestSatelliteWorker(unittest.TestCase):
         worker = MockedWorker2('test')
         worker.heartbeat_interval = 0.5
         worker.wait_time = 0.2
+        starting_port = worker.port_map["controller_port"]
 
         messages = []
 
@@ -86,9 +88,15 @@ class TestSatelliteWorker(unittest.TestCase):
             # noinspection PyUnresolvedReferences
             socket = context.socket(zmq.REP)
             socket.bind(f'tcp://127.0.0.1:{worker.port_map["controller_port"]}')
-            for _ in range(5):
+
+            # mock registration
+            messages.append(socket.recv_string())
+            socket.send_string(str({'dummy_port': starting_port + 1, 'dummy_port2': starting_port + 2}))
+
+            # mock heartbeat
+            for _ in range(4):
                 messages.append(socket.recv_string())
-                socket.send_string(f'{worker.port_map["controller_port"] + 1}')
+                socket.send_string(str({'err': const.ErrorCode.NoIssue.value}))
 
         t = threading.Thread(target=mock_controller)
         t.start()
@@ -102,8 +110,10 @@ class TestSatelliteWorker(unittest.TestCase):
         t.join()
         self.assertGreater(duration, 2)  # 4 heartbeats take 2s
         self.assertLess(duration, 2.5)  # wait time add 0.2, so the process should take around 2.2s
-        self.assertListEqual(messages, ['test|2', 'test', 'test', 'test', 'test'])
-        self.assertDictEqual(worker.port_map, {'controller_port': 6002, 'dummy_port': 6003, 'dummy_port2': 6004})
+        self.assertListEqual(messages, ['test|dummy_port|dummy_port2', 'test', 'test', 'test', 'test'])
+        self.assertDictEqual(worker.port_map, {'controller_port': starting_port,
+                                               'dummy_port': starting_port + 1,
+                                               'dummy_port2': starting_port + 2})
 
     def test_registration_lost(self):
         worker = MockedWorker('test')
@@ -116,16 +126,16 @@ class TestSatelliteWorker(unittest.TestCase):
             socket = context.socket(zmq.REP)
             socket.bind(f'tcp://127.0.0.1:{worker.port_map["controller_port"]}')
             socket.recv_string()
-            socket.send_string(f'{1234}')  # fake port
+            socket.send_string('{}')  # MockedWorker doesn't need port assginment
             socket.recv_string()
-            socket.send_string('-1')  # mock registration lost
+            socket.send_string(str({'err': const.ErrorCode.NotInRegistry.value}))  # mock registration lost
 
         t = threading.Thread(target=mock_controller)
         t.start()
 
         with self.assertRaises(JobError) as cm:
             asyncio.run(worker._run())
-        self.assertEqual(str(cm.exception), 'Controller registration lost')
+        self.assertEqual(str(cm.exception), 'NotInRegistry')
 
         t.join()
 

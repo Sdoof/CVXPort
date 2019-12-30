@@ -3,9 +3,11 @@ import asyncio
 import zmq.asyncio as azmq
 from aiohttp import web
 import pandas as pd
+from typing import Dict
 
 from cvxport.worker import Worker, service, schedulable
 from cvxport import Config
+from cvxport import const
 
 
 class Controller(Worker):
@@ -29,6 +31,8 @@ class Controller(Worker):
             'controller_port': Config['controller_port'],
         }
         self.registry = {}
+        self.data_servers = {}
+        self.executors = {}
 
     # ==================== Heartbeat ====================
     @service(socket='controller_port|REP')
@@ -39,33 +43,53 @@ class Controller(Worker):
         # TODO: should implement port recycling in the future
         """
         raw = await socket.recv_string()
-        msg = raw.split('|')  # either "name|num_ports" or "name"
+        msg = raw.split('|')  # either "name|port1|port2..." or "name"
 
         # first time registration
-        if len(msg) == 2:
-            name, num_ports = msg[0], int(msg[1])
+        if len(msg) > 1:
+            name = msg[0]  # type: str
+            ports = {p: 0 for p in msg[1:] if p != ''}  # type: Dict[str, int]
 
             # duplicated worker
             if name in self.registry:
-                await socket.send_string('-1')
-            else:
-                # register and return starting port
-                self.registry[name] = pd.Timestamp.now('EST')
-                await socket.send_string(f'{self.current_usable_port}')
-                self.current_usable_port += num_ports
+                await socket.send_string(str({'err': const.ErrorCode.AlreadyRegistered.value}))
+                return
+
+            if name.startswith('DataServer:'):
+                # noinspection PyBroadException
+                try:
+                    broker_name = const.Broker(name.split(':')[1]).name  # implicitly check validity of broker
+                except Exception:
+                    await socket.send_string(str({'err': const.ErrorCode.UnKnownBroker.value}))
+                    return
+
+                if 'subscription_port' not in ports or 'broadcast_port' not in ports:
+                    await socket.send_string(str({'err': const.ErrorCode.MissingRequiredPort.value}))
+                    return
+
+                self.data_servers[broker_name] = ports
+
+            # assign ports
+            for port in ports:
+                ports[port] = self.current_usable_port
+                self.current_usable_port += 1
+
+            # register and return ports
+            self.registry[name] = pd.Timestamp.now('EST')
+            await socket.send_string(str(ports))
 
         # heartbeat
         elif len(msg) == 1:
             name = msg[0]
             if name in self.registry:
                 self.registry[name] = pd.Timestamp.now('EST')
-                await socket.send_string('0')
+                await socket.send_string(str({'err': const.ErrorCode.NoIssue.value}))
             else:
-                await socket.send_string('-1')
+                await socket.send_string(str({'err': const.ErrorCode.NotInRegistry.value}))
                 self.logger.warning(f'Potentially lose track of registration {raw}')
 
         else:
-            await socket.send_string('-1')  # doesn't conform to any format
+            await socket.send_string(str({'err': const.ErrorCode.UnknownRequest.value}))
             self.logger.warning(f'Receive improper registration request {raw}')
 
     @service()

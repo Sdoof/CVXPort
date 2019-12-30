@@ -3,11 +3,10 @@ import abc
 import asyncio
 import zmq
 import zmq.asyncio as azmq
-from typing import Awaitable, Callable
+from typing import Callable
 import inspect
 
-from cvxport import utils
-from cvxport import Config
+from cvxport import utils, Config, const
 from cvxport.basic_logging import Logger
 
 
@@ -86,16 +85,21 @@ class Worker(abc.ABC):
         2: 'Worker comes online'
     }
 
-    def __init__(self, name):
+    def __init__(self, name: str):
+        if not name[0].isalpha() or not name.isalnum():
+            raise ValueError('Worker name has to start with alphabet and contain only alphanumeric')
         self.name = name
         self.logger = Logger(name)
         self.port_map = {}
         self.logger.info(f'Starting "{name}" ...')
 
+    def shutdown(self):
+        pass
+
     def run(self):
         # noinspection PyBroadException
         try:
-            asyncio.run(self._run())
+            self._run_worker(self._run())
         except JobError as e:
             self.logger.warning(e)  # JobError is not unexpected errors.
         except Exception:
@@ -169,6 +173,54 @@ class Worker(abc.ABC):
                 for socket in sockets.values():
                     socket.close()
 
+    def _run_worker(self, awaitables):
+        """
+        To mimic asyncio.run but use get_event_loop in place of new_event_loop
+        This is needed in the case of ib_insync
+        """
+
+        # noinspection PyProtectedMember
+        # W
+        if asyncio.events._get_running_loop() is not None:
+            raise RuntimeError("asyncio.run() cannot be called from a running event loop")
+
+        self.loop = asyncio.get_event_loop()
+        try:
+            return self.loop.run_until_complete(awaitables)
+        finally:
+            try:
+                self._cancel_all_tasks()
+                self.loop.run_until_complete(self.loop.shutdown_asyncgens())
+            finally:
+                # we don't close the loop here because we are using asyncio.get_event_loop now
+                # subsequent async code can't be run if we close it
+                # In practise, we are only running one worker. This choice shouldn't be a problem
+                self.shutdown()
+                self.logger.warning('loop is closed')
+
+    def _cancel_all_tasks(self):
+        """
+        Mimic for asyncio.run but rewrite with public methods
+        """
+        to_cancel = asyncio.all_tasks(self.loop)
+        if not to_cancel:
+            return
+
+        for task in to_cancel:
+            task.cancel()
+
+        self.loop.run_until_complete(asyncio.gather(*to_cancel, loop=self.loop, return_exceptions=True))
+
+        for task in to_cancel:
+            if task.cancelled():
+                continue
+            if task.exception() is not None:
+                self.loop.call_exception_handler({
+                    'message': 'unhandled exception during asyncio.run() shutdown',
+                    'exception': task.exception(),
+                    'task': task,
+                })
+
 
 class SatelliteWorker(Worker):
     """
@@ -192,25 +244,21 @@ class SatelliteWorker(Worker):
         jobs = [job for _, job in inspect.getmembers(self, inspect.ismethod) if getattr(job, '__job__', 0) > 1]
         names = [s.split('|')[0] for s in utils.flatten(list(job.__sockets__.values()) for job in jobs)]
         minimal_names = sorted([name for name in utils.unique(names) if name not in self.port_map])
-        num_ports = len(minimal_names)
 
         # request for ports
-        await socket.send_string(f'{self.name}|{num_ports}')
-        port = await utils.wait_for(socket.recv_string(), self.wait_time, JobError('Controller registration timeout'))
-        starting_port = int(port)
-        if starting_port < 0:
-            raise JobError(f'{self.name} already registered')
+        await socket.send_string(f'{self.name}|{"|".join(minimal_names)}')
+        msg = await utils.wait_for(socket.recv_string(), self.wait_time, JobError('Controller registration timeout'))
+        ports = eval(msg)  # type: dict
+        if ports.get('err', 0) < 0:
+            raise JobError(const.ErrorCode(ports['err']).name)
 
-        # assign port to socket
-        for name in minimal_names:
-            self.port_map[name] = starting_port
-            starting_port += 1
+        self.port_map.update(ports)
 
     # ==================== Services ====================
     @service(socket='controller_port|REQ')
     async def emit_heartbeat(self, socket: azmq.Socket):
         await socket.send_string(self.name)
-        ind = int(await utils.wait_for(socket.recv_string(), self.wait_time, JobError('Controller unreachable')))
-        if ind < 0:
-            raise JobError('Controller registration lost')
+        ind = eval(await utils.wait_for(socket.recv_string(), self.wait_time, JobError('Controller unreachable')))
+        if ind.get('err', 0) < 0:
+            raise JobError(const.ErrorCode(ind['err']).name)
         await asyncio.sleep(self.heartbeat_interval)

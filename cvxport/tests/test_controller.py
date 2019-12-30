@@ -8,12 +8,12 @@ import asyncio
 import pandas as pd
 
 from cvxport.controller import Controller, schedulable
-from cvxport import JobError
+from cvxport import JobError, const
 
 
 class MockedController(Controller):
     @schedulable()
-    async def shutdown(self):
+    async def kill(self):
         await asyncio.sleep(3)
         raise JobError("Time's up")
 
@@ -25,7 +25,7 @@ class TestController(unittest.TestCase):
         controller = MockedController('con1')
         port = controller.current_usable_port
 
-        results = [0] * 5
+        results = [0] * 4
         clock = [datetime.now()]
 
         def mock_worker1():
@@ -36,8 +36,8 @@ class TestController(unittest.TestCase):
             # noinspection PyUnresolvedReferences
             socket = context.socket(zmq.REQ)
             socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
-            socket.send_string('worker1|3')
-            results[0] = int(socket.recv_string())  # should get controller_port
+            socket.send_string('worker1|fake_port')
+            results[0] = eval(socket.recv_string())  # should get {'fake_port': 'controller_port'}
             clock[0] = pd.Timestamp.now('EST')  # to check if registration of worker1 gets overridden
 
         def mock_worker2():
@@ -49,8 +49,8 @@ class TestController(unittest.TestCase):
             # noinspection PyUnresolvedReferences
             socket = context.socket(zmq.REQ)
             socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
-            socket.send_string('worker2|5')
-            results[1] = int(socket.recv_string())  # should get controller_port + 3
+            socket.send_string('worker2|fake_port1|fake_port2')
+            results[1] = eval(socket.recv_string())  # should get controller_port + 1, + 2
 
         def mock_worker3():
             """
@@ -61,8 +61,8 @@ class TestController(unittest.TestCase):
             # noinspection PyUnresolvedReferences
             socket = context.socket(zmq.REQ)
             socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
-            socket.send_string('worker1|3')
-            results[2] = int(socket.recv_string())  # should get -1
+            socket.send_string('worker1|fake_port')
+            results[2] = eval(socket.recv_string())  # should get -1
 
         def mock_worker4():
             """
@@ -73,27 +73,20 @@ class TestController(unittest.TestCase):
             socket = context.socket(zmq.REQ)
             socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
             socket.send_string('worker4')
-            results[3] = int(socket.recv_string())  # should get -1 because we didn't register
-
-        def mock_worker5():
-            """
-            improper format
-            """
-            context = zmq.Context()
-            # noinspection PyUnresolvedReferences
-            socket = context.socket(zmq.REQ)
-            socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
-            socket.send_string('worker5|5|')
-            results[4] = int(socket.recv_string())  # should get -1 because of format
+            results[3] = eval(socket.recv_string())
 
         threads = [threading.Thread(target=worker)
-                   for worker in [mock_worker1, mock_worker2, mock_worker3, mock_worker4, mock_worker5]]
+                   for worker in [mock_worker1, mock_worker2, mock_worker3, mock_worker4]]
         [t.start() for t in threads]
 
         controller.run()
 
         [t.join() for t in threads]
-        self.assertListEqual(results, [port, port + 3, -1, -1, -1])
+        self.assertListEqual(results, [{'fake_port': port},
+                                       {'fake_port1': port + 1, 'fake_port2': port + 2},
+                                       {'err': const.ErrorCode.AlreadyRegistered.value},
+                                       {'err': const.ErrorCode.NotInRegistry.value}])
+
         self.assertLessEqual(controller.registry['worker1'], clock[0])
         self.assertSetEqual(set(controller.registry.keys()), {'worker1', 'worker2'})
 
@@ -119,7 +112,7 @@ class TestController(unittest.TestCase):
             for _ in range(3):
                 time.sleep(0.8)
                 socket.send_string('worker1')
-                result1.append(int(socket.recv_string()))
+                result1.append(eval(socket.recv_string()))
 
         def mock_worker2():
             """
@@ -136,21 +129,115 @@ class TestController(unittest.TestCase):
 
             time.sleep(0.8)
             socket.send_string('worker2')
-            result2.append(int(socket.recv_string()))
+            result2.append(eval(socket.recv_string()))
 
             time.sleep(1.6)
             socket.send_string('worker2')
-            result2.append(int(socket.recv_string()))
+            result2.append(eval(socket.recv_string()))
 
         threads = [threading.Thread(target=worker) for worker in [mock_worker1, mock_worker2]]
         [t.start() for t in threads]
 
         controller.run()
 
+        print(result1)
+        print(result2)
+
         [t.join() for t in threads]
-        self.assertListEqual(result1, [0, 0, 0])
-        self.assertListEqual(result2, [0, -1])
+        self.assertListEqual(result1, [{'err': const.ErrorCode.NoIssue.value}] * 3)
+        self.assertListEqual(result2,
+                             [{'err': const.ErrorCode.NoIssue.value}, {'err': const.ErrorCode.NotInRegistry.value}])
         self.assertSetEqual(set(controller.registry.keys()), {'worker1'})
+
+    def test_data_server_registration(self):
+        controller = MockedController('con3')
+        port = controller.current_usable_port
+        results = {}
+
+        def mock_data_server1():
+            """
+            data server with missing port
+            """
+            context = zmq.Context()
+            # noinspection PyUnresolvedReferences
+            socket = context.socket(zmq.REQ)
+            socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
+            socket.send_string('DataServer:IB|subscription_port|fake_port')
+            results['ds1'] = eval(socket.recv_string())  # should get -2
+
+        def mock_data_server2():
+            """
+            data server with unknown broker name
+            """
+            time.sleep(0.5)  # so that run after server1
+            context = zmq.Context()
+            # noinspection PyUnresolvedReferences
+            socket = context.socket(zmq.REQ)
+            socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
+            socket.send_string('DataServer:ABC|subscription_port|broadcast_port|fake_port')
+            results['ds2'] = eval(socket.recv_string())  # should get -5
+
+        def mock_data_server3():
+            """
+            proper data server without error
+            """
+            time.sleep(1)  # so that run after server 1 and 2
+            context = zmq.Context()
+            # noinspection PyUnresolvedReferences
+            socket = context.socket(zmq.REQ)
+            socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
+            socket.send_string('DataServer:IB|subscription_port|broadcast_port|fake_port')
+            results['ds3'] = eval(socket.recv_string())  # should get assignment of the 3 ports
+
+        def mock_data_server4():
+            """
+            duplicated data server
+            """
+            time.sleep(1.5)  # so that run after server 1 and 2
+            context = zmq.Context()
+            # noinspection PyUnresolvedReferences
+            socket = context.socket(zmq.REQ)
+            socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
+            socket.send_string('DataServer:IB|subscription_port|broadcast_port|fake_port')
+            results['ds4'] = eval(socket.recv_string())  # should get -1
+
+        threads = [threading.Thread(target=worker)
+                   for worker in [mock_data_server1, mock_data_server2, mock_data_server3, mock_data_server4]]
+        [t.start() for t in threads]
+
+        controller.run()
+
+        [t.join() for t in threads]
+        self.assertDictEqual(results['ds1'], {'err': const.ErrorCode.MissingRequiredPort.value})
+        self.assertDictEqual(results['ds2'], {'err': const.ErrorCode.UnKnownBroker.value})
+        self.assertDictEqual(results['ds4'], {'err': const.ErrorCode.AlreadyRegistered.value})
+
+        self.assertSetEqual(set(results['ds3'].keys()), {'subscription_port', 'broadcast_port', 'fake_port'})
+        self.assertDictEqual(results['ds3'], controller.data_servers['IB'])
+        self.assertEqual(sum(results['ds3'].values()), 3 * port + 3)
+
+    def test_registration_without_port(self):
+        controller = MockedController('con4')
+        results = {}
+
+        def mock_worker():
+            """
+            data server without port request
+            """
+            context = zmq.Context()
+            # noinspection PyUnresolvedReferences
+            socket = context.socket(zmq.REQ)
+            socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
+            socket.send_string('Worker|')
+            results['worker'] = eval(socket.recv_string())  # should get -2
+
+        t = threading.Thread(target=mock_worker)
+        t.start()
+
+        controller.run()
+
+        t.join()
+        self.assertDictEqual(results['worker'], {})
 
 
 if __name__ == '__main__':

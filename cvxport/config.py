@@ -24,4 +24,7 @@ Config = {
 
     # ---------- Data ----------
     'pystore_path': 'C:/Users/Albert/PycharmProjects/CVXPort/pystore',
+
+    # ---------- Interactive Brokers ----------
+    'ib_port': 7497,
 }

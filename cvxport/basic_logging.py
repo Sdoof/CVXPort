@@ -9,6 +9,7 @@ from cvxport import utils
 
 
 class Logger:
+    # TODO: if create more than 2 workers in the same script, logging of the 2nd worker will contaminate the 1st one
     def __init__(self, name):
         self.name = name
 

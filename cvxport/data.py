@@ -1,4 +1,9 @@
-
+"""
+Host
+1. DataObject - API that provide data to executors
+2. BarPanel - structure of ndarrays for OHLC
+3. Asset class - centralized contract API
+"""
 import abc
 import asyncio
 import zmq
@@ -6,8 +11,37 @@ import zmq.asyncio as azmq
 from typing import AsyncGenerator, Tuple, Dict, List, Union
 import pandas as pd
 import numpy as np
+import ib_insync as ib
+import pystore as ps
+
 from cvxport.utils import get_prices
-from cvxport.const import Freq
+from cvxport.const import Freq, AssetClass, Broker
+from cvxport import Config
+
+
+class Asset:
+    def __init__(self, asset_string: str):
+        """
+        :param asset_string: asset class|ticker
+        """
+        self.asset, self.ticker = asset_string.split('|')   # TODO: should use ':'. '|' is more about union of objects
+        self.asset = AssetClass(self.asset)  # implicitly check if asset class is valid
+        self.string = asset_string
+
+    def to_ib_contract(self):
+        if self.asset == AssetClass.FX:
+            return ib.Forex(self.ticker)
+        elif self.asset == AssetClass.STK:
+            return ib.Stock(self.ticker, exchange='SMART', currency='USD')
+
+    def __eq__(self, other):
+        return self.string == other.string
+
+    def __hash__(self):
+        return hash(self.string)
+
+    def __repr__(self):
+        return self.string
 
 
 class DataObject(abc.ABC):
