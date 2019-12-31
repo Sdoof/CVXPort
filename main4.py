@@ -1,49 +1,27 @@
-import zmq
-from multiprocessing import Process
-import time
+
+import asyncpg as apg
+import asyncio
 from datetime import datetime
+from pytz import timezone
+import time
 
 
-def server():
-    context = zmq.Context()
-    socket = context.socket(zmq.PUB)
-    # socket.setsockopt(zmq.SNDBUF, 10000)
-    socket.set_hwm(51000)
-    socket.bind('tcp://127.0.0.1:12345')
-    now = datetime.now()
-
-    data = [{'date': now.strftime('%Y-%m-%d %H:%M:%S'), 'open': 1.12345, 'high': 1.1245, 'low': 1.1123, 'close': 1.1124}]
-    data *= 100
-    time.sleep(0.2)
-    for i in range(10000):
-        socket.send_string(str(data))
-    socket.send_string('close')
-    print('done')
-    time.sleep(0.1)
-    socket.close()
-
-
-def client():
-    context = zmq.Context()
-    socket = context.socket(zmq.SUB)
-    # socket.setsockopt(zmq.RCVBUF, 10000)
-    # socket.set_hwm(10000)
-    socket.subscribe('')
-    socket.connect('tcp://127.0.0.1:12345')
-    count = 0
+async def main():
+    con = await apg.connect(database='bar_data', user='postgres', password='key')
+    # sql = f'''
+    #     create table test(
+    #         datetime timestamp not null,
+    #         open double precision not null,
+    #         close double precision not null,
+    #         primary key(datetime)
+    #     )
+    # '''
+    sql = f'insert into test(datetime, open, close) values($1, $2, $3)'
     start = time.time()
-    while True:
-        msg = socket.recv_string()
-        if msg == 'close':
-            break
-        msg = eval(msg)
-        count += 1
-    socket.close()
-    print(count)
+    for _ in range(10000):
+        await con.execute(sql, datetime.now(), 1, 2)
+        time.sleep(1e-5)
     print(time.time() - start)
+    await con.close()
 
-
-if __name__ == '__main__':
-    Process(target=client).start()
-    server()
-
+asyncio.run(main())

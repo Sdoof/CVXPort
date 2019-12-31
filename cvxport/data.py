@@ -7,17 +7,16 @@ Host
 import abc
 import asyncio
 from datetime import datetime
-
 import zmq
 import zmq.asyncio as azmq
 from typing import AsyncGenerator, Tuple, Dict, List, Union
 import pandas as pd
 import numpy as np
 import ib_insync as ib
-import pystore as ps
+import asyncpg as apg
 
 from cvxport.utils import get_prices
-from cvxport.const import Freq, AssetClass, Broker
+from cvxport import const
 from cvxport import Config
 
 
@@ -27,13 +26,13 @@ class Asset:
         :param asset_string: asset class|ticker
         """
         self.asset, self.ticker = asset_string.split(':')
-        self.asset = AssetClass(self.asset)  # implicitly check if asset class is valid
+        self.asset = const.AssetClass(self.asset)  # implicitly check if asset class is valid
         self.string = asset_string
 
     def to_ib_contract(self):
-        if self.asset == AssetClass.FX:
+        if self.asset == const.AssetClass.FX:
             return ib.Forex(self.ticker)
-        elif self.asset == AssetClass.STK:
+        elif self.asset == const.AssetClass.STK:
             return ib.Stock(self.ticker, exchange='SMART', currency='USD')
 
     def __eq__(self, other):
@@ -47,17 +46,61 @@ class Asset:
 
 
 class Datum:
-    def __init__(self, asset: Asset, date: datetime, open: float, high: float, low: float, close: float):
+    def __init__(self, asset: Asset, timestamp: datetime, opn: float, high: float, low: float, close: float):
         self.asset = asset
-        self.date = date
-        self.open = open
+        self.timestamp = timestamp
+        self.open = opn
         self.high = high
         self.low = low
         self.close = close
 
+    def to_df(self):
+        return pd.DataFrame({'open': self.open, 'high': self.high, 'low': self.low, 'close': self.close},
+                            index=[self.timestamp])
+
     def __str__(self):
-        return f'{self.asset.string},{self.date.strftime( "%Y-%m-%d %H:%M:%S")},' \
+        return f'{self.asset.string},{self.timestamp.strftime("%Y-%m-%d %H:%M:%S")},' \
                f'{self.open},{self.high},{self.low},{self.close}'
+
+
+class DataStore:
+    def __init__(self, broker: const.Broker, freq: const.Freq):
+        self.broker = broker
+        self.freq = freq
+        self.table_name = f'{broker.name}_{freq.name}'.lower()
+        self.con = None
+        self.prepared = None
+
+    async def connect(self):
+        database = Config['postgres_db']
+        user = Config['postgres_user']
+        password = Config['postgres_pass']
+        port = Config['postgres_port']
+
+        self.con = await apg.connect(database=database, user=user, password=password, host='127.0.0.1', port=port)
+        await self._create_table_if_not_exist()
+        self.prepared = f'insert into {self.table_name} values($1, $2, $3, $4, $5, $6)'
+
+    async def discount(self):
+        await self.con.close()
+
+    async def append(self, data: Datum):
+        await self.con.execute(self.prepared,
+                               data.asset.string, data.timestamp, data.open, data.high, data.low, data.close)
+
+    async def _create_table_if_not_exist(self):
+        sql = f"""
+            create table if not exists {self.table_name}(
+                asset varchar(16) not null,
+                timestamp timestamp with time zone not null,
+                open double precision not null,
+                high double precision not null,
+                low double precision not null,
+                close double precision not null,
+                primary key(asset, timestamp)
+            )
+        """
+        await self.con.execute(sql)
 
 
 class DataObject(abc.ABC):
@@ -67,7 +110,7 @@ class DataObject(abc.ABC):
         self.freq = None
         self.N = len(tickers)
 
-    def set_params(self, freq: Freq, lookback: int):
+    def set_params(self, freq: const.Freq, lookback: int):
         """
         Set up frequency and lookback period. This should be set before __call__
         :param freq:
@@ -91,14 +134,16 @@ class MT4DataObject(DataObject):
 
         # connect to server
         self.context = azmq.Context()
+        # noinspection PyUnresolvedReferences
         self.in_socket = self.context.socket(zmq.SUB)
         self.in_socket.connect(f'tcp://127.0.0.1:{port}')
 
         # subscribe to ticket data
         for ticker in tickers:
+            # noinspection PyUnresolvedReferences
             self.in_socket.setsockopt_string(zmq.SUBSCRIBE, ticker)
 
-    def set_params(self, freq: Freq, lookback: int):
+    def set_params(self, freq: const.Freq, lookback: int):
         super(MT4DataObject, self).set_params(freq, lookback)
         self.bar = BarPanel(self.tickers, freq, lookback)
 
@@ -133,7 +178,7 @@ class BarPanel:
     Extend TimedBar (single period) to store "lookback" periods of data.
     Return panel data of open, high, low, close, of size T x N, where T is lookback and N is number of tickers
     """
-    def __init__(self, tickers: List[str], freq: Freq, lookback: int):
+    def __init__(self, tickers: List[str], freq: const.Freq, lookback: int):
         self.tickers = tickers
         self.N = len(tickers)
         self.freq = freq
@@ -186,28 +231,28 @@ class TimedBars:
     """
     # TODO: TimedBars assumes at least one update within a period. However, we shouldn't trade illiquid markets
 
-    def __init__(self, tickers: List[str], freq: Freq):
+    def __init__(self, tickers: List[str], freq: const.Freq):
         self.timestamp = None
         self.tickers = tickers
         self.N = len(tickers)
         self.data = {ticker: Bar() for ticker in tickers}  # type: Dict[str, Bar]
 
-        if freq == Freq.TICK:
+        if freq == const.Freq.TICK:
             self.delta = pd.Timedelta(0, 'second')
             self.unit = ''
-        if freq == Freq.MINUTE:
+        if freq == const.Freq.MINUTE:
             self.delta = pd.Timedelta(1, 'minute')
             self.unit = 'min'
-        elif freq == Freq.MINUTE5:
+        elif freq == const.Freq.MINUTE5:
             self.delta = pd.Timedelta(5, 'minute')
             self.unit = '5min'
-        elif freq == Freq.HOURLY:
+        elif freq == const.Freq.HOURLY:
             self.delta = pd.Timedelta(1, 'hour')
             self.unit = 'H'
-        elif freq == Freq.DAILY:
+        elif freq == const.Freq.DAILY:
             self.delta = pd.Timedelta(1, 'day')
             self.unit = 'D'
-        elif freq == Freq.MONTHLY:
+        elif freq == const.Freq.MONTHLY:
             self.delta = pd.Timedelta(1, 'M')
             # TODO: monthly unit is not usable in round / floor
             self.unit = 'M'

@@ -6,8 +6,14 @@ import numpy as np
 import zmq.asyncio as azmq
 import zmq
 import asyncio
+import psycopg2 as pg
+from datetime import datetime, timedelta
+from pytz import timezone
+
+from cvxport import Asset, Config
+from cvxport.data import DataStore, Datum
 from cvxport.data import Bar, TimedBars, BarPanel, MT4DataObject
-from cvxport.const import Freq
+from cvxport.const import Freq, Broker
 
 
 class TestBar(unittest.TestCase):
@@ -171,6 +177,7 @@ class TestMT4DataObject(unittest.TestCase):
 
         async def server():
             context = azmq.Context()
+            # noinspection PyUnresolvedReferences
             socket = context.socket(zmq.PUB)
             socket.bind('tcp://127.0.0.1:12345')
 
@@ -218,6 +225,58 @@ class TestMT4DataObject(unittest.TestCase):
         self.assertTrue(result[3][0] < result[4][0])
         assert_array_almost_equal([[1.125, np.nan], [1.175, np.nan], [np.nan, 2.075], [np.nan, 2.1]],
                                   result[4][1]['open'], decimal=10)
+
+
+class TestDataStore(unittest.TestCase):
+    def test_table_creation(self):
+        store = DataStore(Broker.MOCK, Freq.MINUTE)  # tick is not used and for testing purpose
+
+        async def main():
+            await store.connect()
+            await store.discount()
+
+        asyncio.run(main())
+
+        database = Config['postgres_db']
+        user = Config['postgres_user']
+        password = Config['postgres_pass']
+        port = Config['postgres_port']
+        con = pg.connect(database=database, user=user, password=password, host='127.0.0.1', port=port)
+        cur = con.cursor()
+        cur.execute("select table_name from information_schema.tables where table_schema = 'public'")
+        tables = [item[0] for item in cur.fetchall()]
+        self.assertIn(store.table_name, tables)
+        cur.execute(f'drop table {store.table_name}')
+        con.commit()
+        con.close()
+
+    def test_insertion(self):
+        asset = Asset('FX:ABC')
+        store = DataStore(Broker.MOCK, Freq.MINUTE)  # tick is not used and for testing purpose
+        now = datetime.utcnow().replace(tzinfo=timezone('UTC'))
+
+        async def main():
+            await store.connect()
+            for i in range(5):
+                data = Datum(asset, now + timedelta(minutes=i), 1, 2, 3, 4)
+                await store.append(data)
+            await store.discount()
+
+        asyncio.run(main())
+
+        database = Config['postgres_db']
+        user = Config['postgres_user']
+        password = Config['postgres_pass']
+        port = Config['postgres_port']
+        con = pg.connect(database=database, user=user, password=password, host='127.0.0.1', port=port)
+        cur = con.cursor()
+        cur.execute(f'select * from {store.table_name}')
+        res = cur.fetchall()
+        self.assertTupleEqual(res[0][2:], (1.0, 2.0, 3.0, 4.0))
+        self.assertEqual(res[0][1].astimezone(timezone('EST')), now.astimezone(timezone('EST')))
+        cur.execute(f'drop table {store.table_name}')
+        con.commit()
+        con.close()
 
 
 if __name__ == '__main__':

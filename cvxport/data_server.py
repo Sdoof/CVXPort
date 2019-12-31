@@ -2,13 +2,11 @@
 import abc
 import zmq.asyncio as azmq
 import asyncio
-import pystore as ps
-from pystore.collection import Collection
 from typing import List, Dict
 import ib_insync as ibs
 
 from cvxport.worker import SatelliteWorker, service, startup
-from cvxport.data import Asset, Datum
+from cvxport.data import Asset, Datum, DataStore
 from cvxport import utils, Config, JobError, const
 
 
@@ -25,14 +23,13 @@ class DataServer(SatelliteWorker, abc.ABC):
     1. reply subscribed symbols
     2.
     """
-    def __init__(self, broker: const.Broker, save_data=False):
+    def __init__(self, broker: const.Broker):
         super(DataServer, self).__init__(f'DataServer:{broker.name}')
         self.broker = broker
-        self.save_data = save_data
         self.subscription_wait_time = Config['subscription_wait_time']
         self.data_queue = None
         self.subscribed = {}
-        self.ps_handles = {}  # type: Dict[Asset, Collection]
+        self.store = DataStore(broker, const.Freq.MINUTE5)  # we use 5sec bar from IB
 
     # ==================== To override ====================
     @abc.abstractmethod
@@ -40,22 +37,15 @@ class DataServer(SatelliteWorker, abc.ABC):
         pass
 
     @startup()
-    async def startup(self):
+    async def _startup(self):
         self.data_queue = asyncio.Queue()
+        await self.store.connect()
 
     # ==================== Services ====================
     @service(socket='subscription_port|REP')
     async def process_subscription(self, socket: azmq.Socket):
         asset_strings = (await socket.recv_string()).split(',')  # format: asset1|ticker1,asset2|ticker2,...
         assets = [Asset(s) for s in asset_strings]
-
-        # create pystore handles for asset
-        ps.set_path(Config['pystore_path'])
-
-        if self.save_data:
-            for asset in assets:
-                store = ps.store(asset.asset)
-                self.ps_handles[asset] = store.collection(asset.ticker)
 
         # submit subscription
         await utils.wait_for(self.subscribe(assets), self.subscription_wait_time, JobError('Data subscription timeout'))
@@ -68,29 +58,37 @@ class DataServer(SatelliteWorker, abc.ABC):
         This only deals with streaming data. Historical data is handled in another service
         """
         data = await self.data_queue.get()  # type: Datum
-        await socket.send_string(str(data))  # send_pyobj() may cause incomplete packages
-
-        if self.save_data:
-            self.ps_handles[data.asset].write(self.broker.name, data)
+        await socket.send_string(str(data))  # use send py object may cause incomplete packages
+        await self.store.append(data)
 
 
 class IBDataServer(DataServer):
+    quote_type_map = {
+        const.AssetClass.FX: 'MIDPOINT',
+        const.AssetClass.STK: 'TRADES',
+    }  # type: Dict[const.AssetClass, str]
+
     def __init__(self):
-        super(IBDataServer, self).__init__(const.Broker.IB, save_data=True)
+        super(IBDataServer, self).__init__(const.Broker.IB)
         self.handles = {}
+        self.ib = None
+
+    @startup()
+    async def initialize_ib_connection(self):
         self.ib = ibs.IB()
-        self.ib.connect('127.0.0.1', Config['ib_port'])
+        await self.ib.connectAsync('127.0.0.1', Config['ib_port'])
+        self.logger.info(f'IB connected')
 
     async def subscribe(self, assets: List[Asset]):
         def generate_callback(label_asset: Asset):
-            def callback(bars, hasNewBar):
-                if hasNewBar:
+            def callback(bars, has_new_bar):
+                if has_new_bar:
                     # nowait because it's used inside a regular lambda
                     self.data_queue.put_nowait(convert_ib_bar_to_dict(label_asset, bars[-1]))
             return callback
 
         for asset in assets:
-            handle = self.ib.reqRealTimeBars(asset.to_ib_contract(), 5, 'MIDPOINT', False)
+            handle = self.ib.reqRealTimeBars(asset.to_ib_contract(), 5, IBDataServer.quote_type_map[asset.asset], False)
             handle.updateEvent += generate_callback(asset)
             self.handles[asset] = handle
 

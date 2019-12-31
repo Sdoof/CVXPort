@@ -2,12 +2,9 @@
 import pandas as pd
 import time
 import plotly.graph_objs as go
-from timeit import timeit
 import itertools
 import pathlib
-from typing import Iterable, Awaitable
-import zmq
-import zmq.asyncio as azmq
+from typing import Iterable, Awaitable, Type
 import asyncio
 
 
@@ -123,23 +120,3 @@ def get_next_filename(pathname, file_prefix, extension='log'):
         last_file = max(existing_files)
         next_index = int(last_file.split('.')[0].split('_')[1]) + 1
         return (path / f'{file_prefix}_{next_index:03d}.{extension}').as_posix()
-
-
-# ==================== Socket ====================
-async def recv_string(socket: azmq.Socket, timeout: int, exception: Exception):
-    # TODO: check if making poller a global singleton (with deregister) speed up execution
-    poller = azmq.Poller()
-    # noinspection PyUnresolvedReferences
-    poller.register(socket, zmq.POLLIN)
-    ready = dict(await poller.poll(timeout))
-    if socket not in ready:
-        raise exception
-    return await socket.recv_string()
-
-
-if __name__ == '__main__':
-    # for testing performance
-    print('start')
-    t = timeit('flatten([list(range(10000)), list(range(10000)), list(range(10000))])',
-               setup="from __main__ import flatten", number=2000)
-    print(t)

@@ -6,8 +6,9 @@ from typing import List
 import threading
 import zmq
 import time
+import psycopg2 as pg
 
-from cvxport import const, JobError, Config, utils
+from cvxport import const, JobError, Config
 from cvxport.data import Asset, Datum
 from cvxport.data_server import DataServer
 from cvxport.controller import Controller
@@ -16,7 +17,7 @@ from cvxport.worker import service, schedulable
 
 class MockDataServer(DataServer):
     def __init__(self):
-        super().__init__(const.Broker.MOCK, save_data=False)
+        super().__init__(const.Broker.MOCK)
         self.subscribed = {}
 
     async def subscribe(self, assets: List[Asset]):
@@ -70,14 +71,14 @@ class TestDataServer(unittest.TestCase):
             # noinspection PyUnresolvedReferences
             socket = context.socket(zmq.REQ)
             socket.connect(f'tcp://127.0.0.1:{ports["subscription_port"]}')
-            socket.send_string('FX:EURUSD,STOCK:AAPL')
+            socket.send_string('FX:EURUSD,STK:AAPL')
             results['ret'] = eval(socket.recv_string())
             socket.close()
 
             # subscribe to data
             # noinspection PyUnresolvedReferences
             socket = context.socket(zmq.SUB)
-            [socket.subscribe(name) for name in ['FX:EURUSD', 'STOCK:AAPL']]
+            [socket.subscribe(name) for name in ['FX:EURUSD', 'STK:AAPL']]
             socket.connect(f'tcp://127.0.0.1:{ports["broadcast_port"]}')
             msgs = []
             for _ in range(4):
@@ -93,8 +94,21 @@ class TestDataServer(unittest.TestCase):
         self.assertDictEqual(results['ret'], {'code': const.DCode.Succeeded.value})
         headers = [s.split(',')[0] for s in results['msgs']]
         lengths = [len(s.split(',')) for s in results['msgs']]
-        self.assertSetEqual(set(headers), {'FX:EURUSD', 'STOCK:AAPL'})
+        self.assertSetEqual(set(headers), {'FX:EURUSD', 'STK:AAPL'})
         self.assertListEqual(lengths, [6] * 4)
+
+        database = Config['postgres_db']
+        user = Config['postgres_user']
+        password = Config['postgres_pass']
+        port = Config['postgres_port']
+        con = pg.connect(database=database, user=user, password=password, host='127.0.0.1', port=port)
+        cur = con.cursor()
+        cur.execute(f'select count(*) from mock_minute5')
+        res = cur.fetchall()
+        self.assertGreater(res[0][0], 6)
+        cur.execute(f'drop table mock_minute5')
+        con.commit()
+        con.close()
 
 
 if __name__ == '__main__':

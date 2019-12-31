@@ -1,4 +1,7 @@
-
+"""
+Rule: should choose name that is more informative (but less efficient to transmit)
+and choose value that is less informative but shorter in format
+"""
 from enum import Enum
 
 
@@ -6,18 +9,18 @@ class Freq(Enum):
     """
     Use datetime format code here
     """
-    MONTHLY = 'm'
-    DAILY = 'd'
-    HOURLY = 'H'
-    MINUTE = 'M'
-    MINUTE5 = '5M'
-    TICK = 'T'  # for testing only. We don't have the infra to trade on tick
+    MONTHLY = 'month'
+    DAILY = 'day'
+    HOURLY = 'hour'
+    MINUTE = '1min'
+    MINUTE5 = '5min'
+    TICK = 'tick'  # for testing only. We don't have the infra to trade on tick
 
 
 # make sure name and value are the same since we use them interchangeably
 class AssetClass(Enum):
     FX = 'FX'
-    STOCK = 'STOCK'
+    STK = 'STK'  # stock
 
 
 # make sure name and value are the same since we use them interchangeably

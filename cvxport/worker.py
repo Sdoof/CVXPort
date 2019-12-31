@@ -31,7 +31,6 @@ def schedulable(**sockets):
     To label the awaitable as job that runs after start-up jobs
     This provides a blank canvas to allow
     """
-    # TODO: decide if we should add exception handling later
     return generate_wrapper(2, sockets)
 
 
@@ -172,7 +171,10 @@ class Worker(abc.ABC):
             finally:
                 for socket in sockets.values():
                     socket.close()
-                self.shutdown()
+
+                # TODO: this is hacky. Should restructure the startup and group 2 jobs
+                if group == 2:
+                    self.shutdown()
 
 
 class SatelliteWorker(Worker):
