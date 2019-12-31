@@ -84,8 +84,8 @@ class TestController(unittest.TestCase):
         [t.join() for t in threads]
         self.assertListEqual(results, [{'fake_port': port},
                                        {'fake_port1': port + 1, 'fake_port2': port + 2},
-                                       {'err': const.ErrorCode.AlreadyRegistered.value},
-                                       {'err': const.ErrorCode.NotInRegistry.value}])
+                                       {'code': const.CCode.AlreadyRegistered.value},
+                                       {'code': const.CCode.NotInRegistry.value}])
 
         self.assertLessEqual(controller.registry['worker1'], clock[0])
         self.assertSetEqual(set(controller.registry.keys()), {'worker1', 'worker2'})
@@ -144,9 +144,9 @@ class TestController(unittest.TestCase):
         print(result2)
 
         [t.join() for t in threads]
-        self.assertListEqual(result1, [{'err': const.ErrorCode.NoIssue.value}] * 3)
+        self.assertListEqual(result1, [{'code': const.CCode.Succeeded.value}] * 3)
         self.assertListEqual(result2,
-                             [{'err': const.ErrorCode.NoIssue.value}, {'err': const.ErrorCode.NotInRegistry.value}])
+                             [{'code': const.CCode.Succeeded.value}, {'code': const.CCode.NotInRegistry.value}])
         self.assertSetEqual(set(controller.registry.keys()), {'worker1'})
 
     def test_data_server_registration(self):
@@ -208,9 +208,9 @@ class TestController(unittest.TestCase):
         controller.run()
 
         [t.join() for t in threads]
-        self.assertDictEqual(results['ds1'], {'err': const.ErrorCode.MissingRequiredPort.value})
-        self.assertDictEqual(results['ds2'], {'err': const.ErrorCode.UnKnownBroker.value})
-        self.assertDictEqual(results['ds4'], {'err': const.ErrorCode.AlreadyRegistered.value})
+        self.assertDictEqual(results['ds1'], {'code': const.CCode.MissingRequiredPort.value})
+        self.assertDictEqual(results['ds2'], {'code': const.CCode.UnKnownBroker.value})
+        self.assertDictEqual(results['ds4'], {'code': const.CCode.AlreadyRegistered.value})
 
         self.assertSetEqual(set(results['ds3'].keys()), {'subscription_port', 'broadcast_port', 'fake_port'})
         self.assertDictEqual(results['ds3'], controller.data_servers['IB'])

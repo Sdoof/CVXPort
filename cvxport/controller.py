@@ -29,6 +29,7 @@ class Controller(Worker):
         self.port_map = {
             'http_port': Config['controller_http_port'],
             'controller_port': Config['controller_port'],
+            'controller_comm_port': Config['controller_comm_port']
         }
         self.registry = {}
         self.data_servers = {}
@@ -45,14 +46,14 @@ class Controller(Worker):
         raw = await socket.recv_string()
         msg = raw.split('|')  # either "name|port1|port2..." or "name"
 
-        # first time registration
+        # registration
         if len(msg) > 1:
             name = msg[0]  # type: str
             ports = {p: 0 for p in msg[1:] if p != ''}  # type: Dict[str, int]
 
             # duplicated worker
             if name in self.registry:
-                await socket.send_string(str({'err': const.ErrorCode.AlreadyRegistered.value}))
+                await socket.send_string(str({'code': const.CCode.AlreadyRegistered.value}))
                 return
 
             if name.startswith('DataServer:'):
@@ -60,14 +61,15 @@ class Controller(Worker):
                 try:
                     broker_name = const.Broker(name.split(':')[1]).name  # implicitly check validity of broker
                 except Exception:
-                    await socket.send_string(str({'err': const.ErrorCode.UnKnownBroker.value}))
+                    await socket.send_string(str({'code': const.CCode.UnKnownBroker.value}))
                     return
 
                 if 'subscription_port' not in ports or 'broadcast_port' not in ports:
-                    await socket.send_string(str({'err': const.ErrorCode.MissingRequiredPort.value}))
+                    await socket.send_string(str({'code': const.CCode.MissingRequiredPort.value}))
                     return
 
                 self.data_servers[broker_name] = ports
+                self.logger.info(f'Registering data server {broker_name}')
 
             # assign ports
             for port in ports:
@@ -83,13 +85,13 @@ class Controller(Worker):
             name = msg[0]
             if name in self.registry:
                 self.registry[name] = pd.Timestamp.now('EST')
-                await socket.send_string(str({'err': const.ErrorCode.NoIssue.value}))
+                await socket.send_string(str({'code': const.CCode.Succeeded.value}))
             else:
-                await socket.send_string(str({'err': const.ErrorCode.NotInRegistry.value}))
+                await socket.send_string(str({'code': const.CCode.NotInRegistry.value}))
                 self.logger.warning(f'Potentially lose track of registration {raw}')
 
         else:
-            await socket.send_string(str({'err': const.ErrorCode.UnknownRequest.value}))
+            await socket.send_string(str({'code': const.CCode.UnknownRequest.value}))
             self.logger.warning(f'Receive improper registration request {raw}')
 
     @service()
@@ -123,6 +125,19 @@ class Controller(Worker):
         await web._run_app(app, host='localhost', port=self.port_map['http_port'])
 
     # ==================== Data Server ====================
+    @service(socket='controller_comm_port|REP')
+    async def handle_communication(self, socket: azmq.Socket):
+        msg = await socket.recv_string()  # type: str
+        if msg.startswith('DataServer:'):
+            if msg in self.registry:
+                ports = self.data_servers[msg.split(':')[1]]
+                await socket.send_string(
+                    str({p: n for p, n in ports.items() if p in ['subscription_port', 'broadcast_port']}))
+            else:
+                await socket.send_string(str({'code': const.CCode.ServerNotOnline.value}))
+        else:
+            await socket.send_string(str({'code': const.CCode.UnknownRequest.value}))
+
     # @service(in_socket='data_port|PULL')
     # async def start_data_server(self):
     #     """

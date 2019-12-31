@@ -98,9 +98,7 @@ class MT4Executor(Executor):
             if abs(share) >= 1:
                 order = ''
                 await self.out_socket.send_string(order)
-                # TODO: this may
                 reply = await eval(self.in_socket.recv_string())
 
         for _ in range(len(shares)):
-            # TODO: not finished
             pass

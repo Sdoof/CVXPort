@@ -10,16 +10,16 @@ from cvxport import utils
 
 class Logger:
     # TODO: if create more than 2 workers in the same script, logging of the 2nd worker will contaminate the 1st one
-    def __init__(self, name):
-        self.name = name
+    def __init__(self, name: str):
+        self.name = name.replace(':', '')
 
         # set up directory
         today = datetime.strftime(datetime.now(timezone('EST')), '%Y-%m-%d')
         path = pathlib.Path(Config['log_path']) / today
-        filename = utils.get_next_filename(pathname=path, file_prefix=name)
+        filename = utils.get_next_filename(pathname=path, file_prefix=self.name)
 
         # get logger and formatter
-        self.logger = logging.getLogger(name)
+        self.logger = logging.getLogger(self.name)
         self.logger.setLevel(Config['log_level'])
         formatter = logging.Formatter(fmt=Config['log_format'], datefmt=Config['log_date_format'])
 
@@ -50,13 +50,3 @@ class Logger:
 
     def exception(self, msg):
         self.logger.exception(msg)
-
-
-if __name__ == '__main__':
-    logger = Logger('test')
-
-    try:
-        raise ValueError('dummy')
-    except:
-        logger.error('tested')
-        logger.exception('tested')

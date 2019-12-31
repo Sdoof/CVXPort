@@ -82,12 +82,12 @@ class Worker(abc.ABC):
 
     stage_map = {
         1: 'Execute start-up sequences',
-        2: 'Worker comes online'
+        2: 'Online'
     }
 
     def __init__(self, name: str):
-        if not name[0].isalpha() or not name.isalnum():
-            raise ValueError('Worker name has to start with alphabet and contain only alphanumeric')
+        if '|' in name:
+            raise ValueError("Worker name can't contain '|'")
         self.name = name
         self.logger = Logger(name)
         self.port_map = {}
@@ -99,7 +99,7 @@ class Worker(abc.ABC):
     def run(self):
         # noinspection PyBroadException
         try:
-            self._run_worker(self._run())
+            asyncio.run(self._run())
         except JobError as e:
             self.logger.warning(e)  # JobError is not unexpected errors.
         except Exception:
@@ -172,54 +172,7 @@ class Worker(abc.ABC):
             finally:
                 for socket in sockets.values():
                     socket.close()
-
-    def _run_worker(self, awaitables):
-        """
-        To mimic asyncio.run but use get_event_loop in place of new_event_loop
-        This is needed in the case of ib_insync
-        """
-
-        # noinspection PyProtectedMember
-        # W
-        if asyncio.events._get_running_loop() is not None:
-            raise RuntimeError("asyncio.run() cannot be called from a running event loop")
-
-        self.loop = asyncio.get_event_loop()
-        try:
-            return self.loop.run_until_complete(awaitables)
-        finally:
-            try:
-                self._cancel_all_tasks()
-                self.loop.run_until_complete(self.loop.shutdown_asyncgens())
-            finally:
-                # we don't close the loop here because we are using asyncio.get_event_loop now
-                # subsequent async code can't be run if we close it
-                # In practise, we are only running one worker. This choice shouldn't be a problem
                 self.shutdown()
-                self.logger.warning('loop is closed')
-
-    def _cancel_all_tasks(self):
-        """
-        Mimic for asyncio.run but rewrite with public methods
-        """
-        to_cancel = asyncio.all_tasks(self.loop)
-        if not to_cancel:
-            return
-
-        for task in to_cancel:
-            task.cancel()
-
-        self.loop.run_until_complete(asyncio.gather(*to_cancel, loop=self.loop, return_exceptions=True))
-
-        for task in to_cancel:
-            if task.cancelled():
-                continue
-            if task.exception() is not None:
-                self.loop.call_exception_handler({
-                    'message': 'unhandled exception during asyncio.run() shutdown',
-                    'exception': task.exception(),
-                    'task': task,
-                })
 
 
 class SatelliteWorker(Worker):
@@ -249,9 +202,10 @@ class SatelliteWorker(Worker):
         await socket.send_string(f'{self.name}|{"|".join(minimal_names)}')
         msg = await utils.wait_for(socket.recv_string(), self.wait_time, JobError('Controller registration timeout'))
         ports = eval(msg)  # type: dict
-        if ports.get('err', 0) < 0:
-            raise JobError(const.ErrorCode(ports['err']).name)
+        if ports.get('code', 0) < 0:
+            raise JobError(const.CCode(ports['code']).name)
 
+        self.logger.info(f'Successfully register {self.name}')
         self.port_map.update(ports)
 
     # ==================== Services ====================
@@ -259,6 +213,6 @@ class SatelliteWorker(Worker):
     async def emit_heartbeat(self, socket: azmq.Socket):
         await socket.send_string(self.name)
         ind = eval(await utils.wait_for(socket.recv_string(), self.wait_time, JobError('Controller unreachable')))
-        if ind.get('err', 0) < 0:
-            raise JobError(const.ErrorCode(ind['err']).name)
+        if ind.get('code', 0) < 0:
+            raise JobError(const.CCode(ind['code']).name)
         await asyncio.sleep(self.heartbeat_interval)

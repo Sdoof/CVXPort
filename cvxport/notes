@@ -7,3 +7,7 @@
 7. if need to write pullin code multiple times. why not build a new socket class to wrap it up?
 
 Check Asyncio notes in Risk Premia Parity in OneNote
+
+Asyncio Notes
+1. asyncio.Queue is better defined inside coroutine so that it will retrieve the correct event loop
+2. asyncio.run will create a new loop in each run. Coroutine defined outside will fall in another loop and not be run

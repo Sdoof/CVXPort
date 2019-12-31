@@ -22,17 +22,26 @@ class AssetClass(Enum):
 
 # make sure name and value are the same since we use them interchangeably
 class Broker(Enum):
+    MOCK = 'MOCK'  # for testing purpose
     IB = 'IB'
     DWX = 'DWX'  # Darwinex
 
 
-class ErrorCode(Enum):
+class CCode(Enum):
     """
-    For controller response
+    Code for controller
     """
-    NoIssue = 0
+    Succeeded = 0
     AlreadyRegistered = -1
     MissingRequiredPort = -2
     NotInRegistry = -3
     UnknownRequest = -4
     UnKnownBroker = -5
+    ServerNotOnline = -6
+
+
+class DCode(Enum):
+    """
+    Code for data server
+    """
+    Succeeded = 0

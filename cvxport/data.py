@@ -6,6 +6,8 @@ Host
 """
 import abc
 import asyncio
+from datetime import datetime
+
 import zmq
 import zmq.asyncio as azmq
 from typing import AsyncGenerator, Tuple, Dict, List, Union
@@ -24,7 +26,7 @@ class Asset:
         """
         :param asset_string: asset class|ticker
         """
-        self.asset, self.ticker = asset_string.split('|')   # TODO: should use ':'. '|' is more about union of objects
+        self.asset, self.ticker = asset_string.split(':')
         self.asset = AssetClass(self.asset)  # implicitly check if asset class is valid
         self.string = asset_string
 
@@ -42,6 +44,20 @@ class Asset:
 
     def __repr__(self):
         return self.string
+
+
+class Datum:
+    def __init__(self, asset: Asset, date: datetime, open: float, high: float, low: float, close: float):
+        self.asset = asset
+        self.date = date
+        self.open = open
+        self.high = high
+        self.low = low
+        self.close = close
+
+    def __str__(self):
+        return f'{self.asset.string},{self.date.strftime( "%Y-%m-%d %H:%M:%S")},' \
+               f'{self.open},{self.high},{self.low},{self.close}'
 
 
 class DataObject(abc.ABC):

@@ -12,7 +12,7 @@ from cvxport import const
 # mock class
 class MockedWorker(SatelliteWorker):
     @schedulable()
-    async def shutdown(self):
+    async def kill(self):
         await asyncio.sleep(3)
         raise JobError("Time's up")
 
@@ -58,7 +58,7 @@ class TestSatelliteWorker(unittest.TestCase):
             socket = context.socket(zmq.REP)
             socket.bind(f'tcp://127.0.0.1:{worker.port_map["controller_port"]}')
             socket.recv_string()
-            socket.send_string(str({'err': const.ErrorCode.AlreadyRegistered.value}))
+            socket.send_string(str({'code': const.CCode.AlreadyRegistered.value}))
 
         # start controller
         t = threading.Thread(target=mock_controller)
@@ -96,7 +96,7 @@ class TestSatelliteWorker(unittest.TestCase):
             # mock heartbeat
             for _ in range(4):
                 messages.append(socket.recv_string())
-                socket.send_string(str({'err': const.ErrorCode.NoIssue.value}))
+                socket.send_string(str({'code': const.CCode.Succeeded.value}))
 
         t = threading.Thread(target=mock_controller)
         t.start()
@@ -126,9 +126,9 @@ class TestSatelliteWorker(unittest.TestCase):
             socket = context.socket(zmq.REP)
             socket.bind(f'tcp://127.0.0.1:{worker.port_map["controller_port"]}')
             socket.recv_string()
-            socket.send_string('{}')  # MockedWorker doesn't need port assginment
+            socket.send_string('{}')  # MockedWorker doesn't need port assignment
             socket.recv_string()
-            socket.send_string(str({'err': const.ErrorCode.NotInRegistry.value}))  # mock registration lost
+            socket.send_string(str({'code': const.CCode.NotInRegistry.value}))  # mock registration lost
 
         t = threading.Thread(target=mock_controller)
         t.start()

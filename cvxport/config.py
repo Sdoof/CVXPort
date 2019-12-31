@@ -8,11 +8,12 @@ Config = {
 
     # ---------- Controller ----------
     'controller_http_port': 6001,
-    'controller_port': 6002,
-    'starting_port': 6003,
+    'controller_port': 6002,  # for registration and heartbeat
+    'controller_comm_port': 6003,  # for communication
+    'starting_port': 6004,
     'heartbeat_interval': 10,
 
-    # ---------- Controller ----------
+    # ---------- Worker ----------
     'startup_wait_time': 5,  # in seconds
 
     # ---------- Logging ----------
@@ -22,8 +23,9 @@ Config = {
     'log_format': '[%(asctime)s.%(msecs)d %(levelname)s] %(message)s',
     'log_date_format': '%Y-%m-%d %H:%M:%S',
 
-    # ---------- Data ----------
+    # ---------- Data Server ----------
     'pystore_path': 'C:/Users/Albert/PycharmProjects/CVXPort/pystore',
+    'subscription_wait_time': 5,
 
     # ---------- Interactive Brokers ----------
     'ib_port': 7497,
