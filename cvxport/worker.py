@@ -202,19 +202,13 @@ class SatelliteWorker(Worker):
 
         # request for ports
         await socket.send_string(f'{self.name}|{"|".join(minimal_names)}')
-        msg = await utils.wait_for(socket.recv_string(), self.wait_time, JobError('Controller registration timeout'))
-        ports = eval(msg)  # type: dict
-        if ports.get('code', 0) < 0:
-            raise JobError(const.CCode(ports['code']).name)
-
-        self.logger.info(f'Successfully register {self.name}')
+        ports = await utils.wait_for_reply(socket, self.wait_time, const.CCode, 'Controller registration')
         self.port_map.update(ports)
+        self.logger.info(f'Successfully register {self.name}')
 
     # ==================== Services ====================
     @service(socket='controller_port|REQ')
     async def emit_heartbeat(self, socket: azmq.Socket):
         await socket.send_string(self.name)
-        ind = eval(await utils.wait_for(socket.recv_string(), self.wait_time, JobError('Controller unreachable')))
-        if ind.get('code', 0) < 0:
-            raise JobError(const.CCode(ind['code']).name)
+        await utils.wait_for_reply(socket, self.wait_time, const.CCode, 'Heartbeat')
         await asyncio.sleep(self.heartbeat_interval)

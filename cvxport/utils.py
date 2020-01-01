@@ -4,7 +4,7 @@ import time
 import plotly.graph_objs as go
 import itertools
 import pathlib
-from typing import Iterable, Awaitable, Type
+from typing import Iterable, Awaitable, Union, Type
 import asyncio
 import zmq.asyncio as azmq
 
@@ -110,12 +110,13 @@ async def wait_for(awaitable: Awaitable, wait_time: float, exception: Exception)
         raise exception
 
 
-async def wait_for_reply(socket: azmq.Socket, wait_time: float, desc: str):
+async def wait_for_reply(socket: azmq.Socket, wait_time: float, code: Type[Union[const.CCode, const.DCode]], desc: str):
     """
     we duplicate the code from "wait_for" because we intend to totally replace "wait_for"
 
     :param socket: socket from which we wait for reply
     :param wait_time: in seconds
+    :param code: what reply code class to use
     :param desc: request description, used in raising error
     """
     try:
@@ -124,7 +125,7 @@ async def wait_for_reply(socket: azmq.Socket, wait_time: float, desc: str):
         raise JobError(f'{desc} times out')
 
     if reply.get('code', 0) < 0:
-        raise JobError(const.CCode(reply['code']).name)
+        raise JobError(code(reply['code']).name)
 
     return reply
 

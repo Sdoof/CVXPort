@@ -46,7 +46,7 @@ class Asset:
 
 
 class Datum:
-    def __init__(self, asset: Asset, timestamp: datetime, opn: float, high: float, low: float, close: float):
+    def __init__(self, asset: Asset, timestamp: pd.Timestamp, opn: float, high: float, low: float, close: float):
         self.asset = asset
         self.timestamp = timestamp
         self.open = opn
@@ -225,6 +225,134 @@ class BarPanel:
         return None
 
 
+class AssetDataAggregator:
+    """
+    Aggregate higher frequency bar into lower frequency
+    """
+    freq_unit_map = {
+        const.Freq.MINUTE: 'min',
+        const.Freq.MINUTE5: '5min',
+        const.Freq.HOURLY: 'H',
+        const.Freq.DAILY: 'D',
+    }
+
+    def __init__(self, assets: List[Asset], freq: const.Freq):
+        self.timestamp = None  # store current timestamp
+        self.unit = AssetDataAggregator.freq_unit_map.get(freq)
+
+        if self.unit is None:
+            raise ValueError(f'Frequency {freq.name} is not supported')
+
+        self.tickers = assets
+        self.N = len(assets)
+        self.data = {asset: DownSampledBar() for asset in assets}  # type: Dict[Asset, DownSampledBar]
+
+    def update(self, data: Datum) -> Union[Tuple, None]:
+        """
+        Update bar information and return opens, highs, lows, closes when either
+        1. all tickers are updated or
+        2. not all tickers are updated but the data of next bar starts to come in
+        """
+        new_timestamp = pd.Timestamp(data.timestamp).ceil(self.unit)  # use ceil to avoid forward looking bias
+        if self.timestamp is None:
+            # first update
+            self.timestamp = new_timestamp
+            self.data[data.asset].update(data)
+
+        elif new_timestamp == self.timestamp:
+            self.data[data.asset].update(data)
+
+        elif new_timestamp > self.timestamp:
+            pass
+
+        else:
+            raise ValueError('Timestamp goes backward!')
+
+        self.data[ticker].update(price)
+
+        if self.timestamp is None:
+            # use floor so that we can end this bar earlier
+            self.timestamp = timestamp.floor(self.unit) if self.unit != '' else timestamp
+        elif timestamp >= self.timestamp + self.delta:
+            opens = np.zeros(self.N)
+            highs = np.zeros(self.N)
+            lows = np.zeros(self.N)
+            closes = np.zeros(self.N)
+
+            for idx, tic in enumerate(self.tickers):
+                opens[idx], highs[idx], lows[idx], closes[idx] = self.data[tic].clear()
+
+            self.timestamp = timestamp.floor(self.unit) if self.unit != '' else timestamp
+            return self.timestamp, opens, highs, lows, closes
+
+        return None
+
+
+class DownSampledBar:
+    """
+    Down sample bars into a lower frequency bar
+    """
+    def __init__(self, bar_freq: const.Freq, update_freq: const.Freq, offset: int = 0):
+        self.bar_freq = bar_freq
+        self.offset = pd.to_timedelta(update_freq.value) * offset
+
+        self.timestamp = None
+        self.check = pd.Timestamp.min
+        self.open = None
+        self.high = -np.inf
+        self.low = np.inf
+        self.close = None
+
+    def update(self, data: Datum) -> Union[Tuple, None]:
+        if data.timestamp == self.check:
+            self._update(data)
+            opn, high, low, close = self.open, self.high, self.low, self.close
+
+            # reset
+            self.check = pd.Timestamp.min
+            self.open = None
+            self.high = -np.inf
+            self.low = np.inf
+            self.close = None
+
+            return self.timestamp, opn, high, low, close
+
+        elif data.timestamp > self.check:
+            old_time, opn, high, low, close = self.timestamp, self.open, self.high, self.low, self.close
+
+            # deal with first update
+            if self.open is None:
+                is_new = True
+
+                if data.timestamp == data.timestamp.ceil(self.bar_freq.value) - self.offset:
+                    return data.timestamp + self.offset, data.open, data.high, data.low, data.close
+
+            else:
+                is_new = False
+
+            # reset
+            self.timestamp = (data.timestamp + self.offset).ceil(self.bar_freq.value)
+            self.check = self.timestamp - self.offset
+            self.open = data.open
+            self.high = data.high
+            self.low = data.low
+            self.close = data.close
+
+            if is_new:
+                return None
+            else:
+                return old_time, opn, high, low, close
+
+        else:
+            self._update(data)
+            return None
+
+    def _update(self, data: Datum):
+        self.high = max(self.high, data.high)
+        self.low = min(self.low, data.low)
+        self.close = data.close
+
+
 class TimedBars:
     """
     Aggregate bar data of tickers for pre-defined frequency, say minutely
@@ -235,7 +363,7 @@ class TimedBars:
         self.timestamp = None
         self.tickers = tickers
         self.N = len(tickers)
-        self.data = {ticker: Bar() for ticker in tickers}  # type: Dict[str, Bar]
+        self.data = {ticker: TickAggregator() for ticker in tickers}  # type: Dict[str, TickAggregator]
 
         if freq == const.Freq.TICK:
             self.delta = pd.Timedelta(0, 'second')
@@ -260,13 +388,13 @@ class TimedBars:
     def __call__(self, timestamp: pd.Timestamp, ticker: str, price: float) \
             -> Union[Tuple[pd.Timestamp, np.ndarray, np.ndarray, np.ndarray, np.ndarray], None]:
         """
-            Update bar information and return opens, highs, lows, closes when time's up
+        Update bar information and return opens, highs, lows, closes when time's up
 
-            :param pd.Timestamp timestamp: timestamp of current tick
-            :param str ticker: ticker of the tick
-            :param float price: mid of the tick
-            :return: None or opens, highs, lows closes when time's up
-            """
+        :param pd.Timestamp timestamp: timestamp of current tick
+        :param str ticker: ticker of the tick
+        :param float price: mid of the tick
+        :return: None or opens, highs, lows closes when time's up
+        """
         self.data[ticker].update(price)
 
         if self.timestamp is None:
@@ -287,7 +415,7 @@ class TimedBars:
         return None
 
 
-class Bar:
+class TickAggregator:
     def __init__(self):
         self.open = None
         self.high = None

@@ -10,15 +10,16 @@ import psycopg2 as pg
 from datetime import datetime, timedelta
 from pytz import timezone
 
-from cvxport import Asset, Config
-from cvxport.data import DataStore, Datum
-from cvxport.data import Bar, TimedBars, BarPanel, MT4DataObject
+from cvxport import Config
+from cvxport.data import DataStore, Datum, Asset
+from cvxport.data import TickAggregator, TimedBars, BarPanel, MT4DataObject, DownSampledBar
 from cvxport.const import Freq, Broker
+from cvxport import const
 
 
 class TestBar(unittest.TestCase):
     def test_bar1(self):
-        bar = Bar()
+        bar = TickAggregator()
         bar.update(1)
         bar.update(0)
         bar.update(2.1)
@@ -30,7 +31,7 @@ class TestBar(unittest.TestCase):
 
     def test_bar2(self):
         # single point
-        bar = Bar()
+        bar = TickAggregator()
         bar.update(1)
         self.assertEqual(1, bar.open)
         self.assertEqual(1, bar.high)
@@ -277,6 +278,110 @@ class TestDataStore(unittest.TestCase):
         cur.execute(f'drop table {store.table_name}')
         con.commit()
         con.close()
+
+
+class TestDownSampledBar(unittest.TestCase):
+    def test_start(self):
+        now = pd.Timestamp.now()
+        print(now)
+        data = Datum(Asset('FX:EURUSD'), now, 1, 2, 3, 4)
+        bar = DownSampledBar(const.Freq.MINUTE, const.Freq.SECOND5)
+        out = bar.update(data)
+        self.assertIsNone(out)
+        self.assertEqual(bar.timestamp, now.ceil('1min'))
+        self.assertEqual(bar.check, now.ceil('1min'))
+        self.assertEqual(bar.open, 1)
+        self.assertEqual(bar.close, 4)
+
+        bar = DownSampledBar(const.Freq.MINUTE, const.Freq.SECOND5, 2)
+        bar.update(data)
+        self.assertEqual(bar.timestamp, now.ceil('1min'))
+        self.assertEqual(bar.check, now.ceil('1min') - pd.Timedelta(seconds=10))
+        self.assertEqual(bar.high, 2)
+
+    def test_update(self):
+        asset = Asset('FX:EURUSD')
+        now = pd.Timestamp('2019-01-01 12:01:00')
+        delta = pd.Timedelta(seconds=5)
+        data = Datum(asset, now, 1, 2, 3, 4)
+        bar = DownSampledBar(const.Freq.MINUTE, const.Freq.SECOND5)
+
+        # test immediate return
+        out = bar.update(data)
+        self.assertIsNotNone(out)
+        self.assertTupleEqual(out, (now, 1, 2, 3, 4))
+
+        # test regular update
+        self.assertIsNone(bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:01:05'), 1, 3, 0, 2)))
+        self.assertIsNone(bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:01:55'), 1, 6, 0, 2)))
+        out = bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:02:00'), 2, 5, 1, 1))
+        self.assertEqual(out, (pd.Timestamp('2019-01-01 12:02:00'), 1, 6, 0, 1))
+        self.assertEqual(bar.check, pd.Timestamp.min)
+        self.assertEqual(bar.open, None)
+
+        # test consecutive update
+        self.assertIsNone(bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:02:05'), 1, 3, 0, 2)))
+        self.assertIsNone(bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:02:10'), 4, 5, -1, 3)))
+        out = bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:03:00'), 2, 4, 1, 1))
+        self.assertEqual(out, (pd.Timestamp('2019-01-01 12:03:00'), 1, 5, -1, 1))
+
+        # test skip update
+        self.assertIsNone(bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:04:05'), 1, 3, 0, 2)))  # skip from the 3rd minute
+        out = bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:05:05'), 2, 4, 1, 1))  # skip from the 4th minute
+        self.assertTupleEqual(out, (pd.Timestamp('2019-01-01 12:05:00'), 1, 3, 0, 2))
+        self.assertEqual(bar.timestamp, pd.Timestamp('2019-01-01 12:06:00'))
+        self.assertEqual(bar.open, 2)
+        self.assertEqual(bar.high, 4)
+        self.assertEqual(bar.close, 1)
+
+    def test_offset(self):
+        asset = Asset('FX:EURUSD')
+        now = pd.Timestamp('2019-01-01 12:00:55')  # start from the last bar
+        delta = pd.Timedelta(seconds=5)
+        bar = DownSampledBar(const.Freq.MINUTE, const.Freq.SECOND5, offset=1)
+
+        # test start
+        out = bar.update(Datum(asset, now, 1, 3, 0, 2))
+        self.assertTupleEqual(out, (pd.Timestamp('2019-01-01 12:01:00'), 1, 3, 0, 2))
+
+        # test update
+        self.assertIsNone(bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:01:00'), 1, 3, 0, 2)))
+        out = bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:01:55'), 6, 9, 4, 5))
+        self.assertTupleEqual(out, (pd.Timestamp('2019-01-01 12:02:00'), 1, 9, 0, 5))
+        self.assertEqual(bar.check, pd.Timestamp.min)
+        self.assertIsNone(bar.open)
+
+        # test skip
+        self.assertIsNone(bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:03:00'), 6, 9, 4, 5)))
+        out = bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:04:00'), 1, 3, 0, 2))
+        self.assertEqual(out, (pd.Timestamp('2019-01-01 12:04:00'), 6, 9, 4, 5))
+        self.assertEqual(bar.timestamp, pd.Timestamp('2019-01-01 12:05:00'))
+        self.assertEqual(bar.open, 1)
+        self.assertEqual(bar.close, 2)
+
+    def test_5minute(self):
+        asset = Asset('FX:EURUSD')
+        delta = pd.Timedelta(seconds=5)
+        bar = DownSampledBar(const.Freq.MINUTE5, const.Freq.SECOND5, offset=1)
+
+        # test start
+        out = bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:04:55'), 1, 3, 0, 2))
+        self.assertTupleEqual(out, (pd.Timestamp('2019-01-01 12:05:00'), 1, 3, 0, 2))
+
+        # test update
+        self.assertIsNone(bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:05:00'), 1, 3, 0, 2)))
+        out = bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:09:55'), 6, 9, 4, 5))
+        self.assertTupleEqual(out, (pd.Timestamp('2019-01-01 12:10:00'), 1, 9, 0, 5))
+        self.assertEqual(bar.check, pd.Timestamp.min)
+        self.assertIsNone(bar.open)
+
+        # test skip
+        self.assertIsNone(bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:10:00'), 6, 9, 4, 5)))
+        out = bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:15:00'), 1, 3, 0, 2))
+        self.assertEqual(out, (pd.Timestamp('2019-01-01 12:15:00'), 6, 9, 4, 5))
+        self.assertEqual(bar.timestamp, pd.Timestamp('2019-01-01 12:20:00'))
+        self.assertEqual(bar.open, 1)
+        self.assertEqual(bar.close, 2)
 
 
 if __name__ == '__main__':

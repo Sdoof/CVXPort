@@ -21,25 +21,28 @@ class DataConnector:
         self.wait_time = Config['subscription_wait_time']
 
     async def connect(self, socket: azmq.Socket):
+        """
+        Ask for ports of data server
+        """
         await socket.send_string(f'DataServer:{self.broker.name}')
-        ports = await utils.wait_for(socket.recv_json(), self.wait_time, JobError('Port request timeout'))  # type: dict
+        return await utils.wait_for_reply(socket, self.wait_time, const.CCode, 'Port request')  # type: dict
 
-        if ports.get('code', 0) < 0:
-            raise JobError(const.CCode(ports['code']).name)
-
-        return ports
-
-    async def subscribe(self, socket, assets: List[Asset]):
+    async def subscribe(self, sub_socket: azmq.Socket, broadcast_socket: azmq.Socket, assets: List[Asset]):
+        """
+        Send subscription request to data server
+        This job should be run as schedulable in stage 2 with subscription socket and broadcast_socket
+        """
+        # send subscription
         msg = ','.join(asset.string for asset in assets)
-        await socket.send_string(msg)
-        reply = await utils.wait_for(socket.recv_json(), self.wait_time, JobError('Data subscription timeout'))
+        await sub_socket.send_string(msg)
+        await utils.wait_for_reply(sub_socket, self.wait_time, const.DCode, 'Data subscription')  # use DCode
 
-        if ports.get('code', 0) < 0:
-            raise JobError(const.CCode(ports['code']).name)
+        # subscribe to ticker
+        for asset in assets:
+            broadcast_socket.subscribe(asset.string)
 
     async def get_new_bar(self) -> AsyncGenerator[Tuple[pd.Timestamp, Dict[str, np.ndarray]], None]:
         yield
-
 
 
 class Executor(SatelliteWorker):

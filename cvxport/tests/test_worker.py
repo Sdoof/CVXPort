@@ -39,7 +39,7 @@ class TestSatelliteWorker(unittest.TestCase):
 
         with self.assertRaises(JobError) as cm:
             asyncio.run(worker._run())
-        self.assertEqual(str(cm.exception), 'Controller registration timeout')
+        self.assertEqual(str(cm.exception), 'Controller registration times out')
 
         duration = time.time() - start
         # since we set the wait time to be 1.5 second, the worker should return between 1.5 to 1.6 seconds
@@ -104,7 +104,7 @@ class TestSatelliteWorker(unittest.TestCase):
 
         with self.assertRaises(JobError) as cm:
             asyncio.run(worker._run())
-        self.assertEqual(str(cm.exception), 'Controller unreachable')
+        self.assertEqual(str(cm.exception), 'Heartbeat times out')
 
         duration = time.time() - start
         t.join()

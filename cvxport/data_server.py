@@ -47,6 +47,11 @@ class DataServer(SatelliteWorker, abc.ABC):
     # -------------------- Services --------------------
     @service(socket='subscription_port|REP')
     async def process_subscription(self, socket: azmq.Socket):
+        """
+        Receive request of the form "asset1|ticker1,asset2|ticker2,..."
+        Subscribe to the broker
+        TODO: add handling for exception. Currently always succeed
+        """
         msg = await socket.recv_string()  # format: asset1|ticker1,asset2|ticker2,...
         self.logger.info(f'Receive subscription request on {msg}')
 
