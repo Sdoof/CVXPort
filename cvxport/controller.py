@@ -53,7 +53,7 @@ class Controller(Worker):
 
             # duplicated worker
             if name in self.registry:
-                await socket.send_string(str({'code': const.CCode.AlreadyRegistered.value}))
+                await socket.send_json({'code': const.CCode.AlreadyRegistered.value})
                 return
 
             if name.startswith('DataServer:'):
@@ -61,11 +61,11 @@ class Controller(Worker):
                 try:
                     broker_name = const.Broker(name.split(':')[1]).name  # implicitly check validity of broker
                 except Exception:
-                    await socket.send_string(str({'code': const.CCode.UnKnownBroker.value}))
+                    await socket.send_json({'code': const.CCode.UnKnownBroker.value})
                     return
 
                 if 'subscription_port' not in ports or 'broadcast_port' not in ports:
-                    await socket.send_string(str({'code': const.CCode.MissingRequiredPort.value}))
+                    await socket.send_json({'code': const.CCode.MissingRequiredPort.value})
                     return
 
                 self.data_servers[broker_name] = ports
@@ -78,20 +78,20 @@ class Controller(Worker):
 
             # register and return ports
             self.registry[name] = pd.Timestamp.now('EST')
-            await socket.send_string(str(ports))
+            await socket.send_json(ports)
 
         # heartbeat
         elif len(msg) == 1:
             name = msg[0]
             if name in self.registry:
                 self.registry[name] = pd.Timestamp.now('EST')
-                await socket.send_string(str({'code': const.CCode.Succeeded.value}))
+                await socket.send_json({'code': const.CCode.Succeeded.value})
             else:
-                await socket.send_string(str({'code': const.CCode.NotInRegistry.value}))
+                await socket.send_json({'code': const.CCode.NotInRegistry.value})
                 self.logger.warning(f'Potentially lose track of registration {raw}')
 
         else:
-            await socket.send_string(str({'code': const.CCode.UnknownRequest.value}))
+            await socket.send_json({'code': const.CCode.UnknownRequest.value})
             self.logger.warning(f'Receive improper registration request {raw}')
 
     @service()
@@ -131,19 +131,8 @@ class Controller(Worker):
         if msg.startswith('DataServer:'):
             if msg in self.registry:
                 ports = self.data_servers[msg.split(':')[1]]
-                await socket.send_string(
-                    str({p: n for p, n in ports.items() if p in ['subscription_port', 'broadcast_port']}))
+                await socket.send_json({p: n for p, n in ports.items() if p in ['subscription_port', 'broadcast_port']})
             else:
-                await socket.send_string(str({'code': const.CCode.ServerNotOnline.value}))
+                await socket.send_json({'code': const.CCode.ServerNotOnline.value})
         else:
-            await socket.send_string(str({'code': const.CCode.UnknownRequest.value}))
-
-    # @service(in_socket='data_port|PULL')
-    # async def start_data_server(self):
-    #     """
-    #     1. Start data server (per broker) if needed
-    #     2. Add symbol to running data servers
-    #     3. Return to executors ports from which data can be retrieved
-    #     """
-    #     while True:
-    #         pass
+            await socket.send_json({'code': const.CCode.UnknownRequest.value})

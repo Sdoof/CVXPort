@@ -16,7 +16,7 @@ def convert_ib_bar_to_dict(asset: Asset, bar: ibs.BarData):
     return Datum(asset, bar.time, bar.open_, bar.high, bar.low, bar.close)
 
 
-# ==================== Main Classes ====================
+# ==================== Base Class ====================
 class DataServer(SatelliteWorker, abc.ABC):
     """
     Data server base class. Provides API template for
@@ -31,26 +31,44 @@ class DataServer(SatelliteWorker, abc.ABC):
         self.subscribed = {}
         self.store = DataStore(broker, const.Freq.MINUTE5)  # we use 5sec bar from IB
 
-    # ==================== To override ====================
-    @abc.abstractmethod
-    async def subscribe(self, assets: List[Asset]):
-        pass
-
     @startup()
     async def _startup(self):
         self.data_queue = asyncio.Queue()
         await self.store.connect()
 
-    # ==================== Services ====================
+    # -------------------- To override --------------------
+    @abc.abstractmethod
+    async def subscribe(self, assets: List[Asset]):
+        pass
+
+    async def clean_up(self):
+        pass
+
+    # -------------------- Services --------------------
     @service(socket='subscription_port|REP')
     async def process_subscription(self, socket: azmq.Socket):
-        asset_strings = (await socket.recv_string()).split(',')  # format: asset1|ticker1,asset2|ticker2,...
-        assets = [Asset(s) for s in asset_strings]
+        msg = await socket.recv_string()  # format: asset1|ticker1,asset2|ticker2,...
+        self.logger.info(f'Receive subscription request on {msg}')
 
-        # submit subscription
-        await utils.wait_for(self.subscribe(assets), self.subscription_wait_time, JobError('Data subscription timeout'))
-        self.subscribed.update(dict.fromkeys(assets))  # add subscription
-        socket.send_string(str({'code': const.DCode.Succeeded.value}))
+        # filter existing assets
+        asset_strings = msg.split(',')
+        assets = [Asset(s) for s in asset_strings]
+        assets = [asset for asset in assets if asset not in self.subscribed]
+
+        if len(assets) > 0:
+            # submit subscription
+            await utils.wait_for(self.subscribe(assets),
+                                 self.subscription_wait_time,
+                                 JobError('Data subscription timeout'))
+
+            # remember newly added subscription
+            self.subscribed.update(dict.fromkeys(assets))
+            self.logger.info(f'Subscribed: {str(assets)}')
+
+        else:
+            self.logger.info(f'No new subscription is needed')
+
+        socket.send_json({'code': const.DCode.Succeeded.value})
 
     @service(socket='broadcast_port|PUB')
     async def publish_and_save_data(self, socket: azmq.Socket):
@@ -61,7 +79,13 @@ class DataServer(SatelliteWorker, abc.ABC):
         await socket.send_string(str(data))  # use send py object may cause incomplete packages
         await self.store.append(data)
 
+    async def shutdown(self):
+        await self.clean_up()
+        await self.store.disconnect()
+        self.logger.info('Exited data server')
 
+
+# ==================== Interactive Brokers ====================
 class IBDataServer(DataServer):
     quote_type_map = {
         const.AssetClass.FX: 'MIDPOINT',
@@ -71,7 +95,8 @@ class IBDataServer(DataServer):
     def __init__(self):
         super(IBDataServer, self).__init__(const.Broker.IB)
         self.handles = {}
-        self.ib = None
+        # noinspection PyTypeChecker
+        self.ib = None  # type: ibs.IB
 
     @startup()
     async def initialize_ib_connection(self):
@@ -92,5 +117,5 @@ class IBDataServer(DataServer):
             handle.updateEvent += generate_callback(asset)
             self.handles[asset] = handle
 
-    def shutdown(self):
+    async def clean_up(self):
         self.ib.disconnect()

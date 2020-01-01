@@ -8,7 +8,7 @@ import zmq
 import time
 import psycopg2 as pg
 
-from cvxport import const, JobError, Config
+from cvxport import const, JobError, Config, utils
 from cvxport.data import Asset, Datum
 from cvxport.data_server import DataServer
 from cvxport.controller import Controller
@@ -18,10 +18,10 @@ from cvxport.worker import service, schedulable
 class MockDataServer(DataServer):
     def __init__(self):
         super().__init__(const.Broker.MOCK)
-        self.subscribed = {}
+        self.check = []
 
     async def subscribe(self, assets: List[Asset]):
-        pass
+        self.check += assets  # for testing double subscription
 
     @service()
     async def emit_data(self):
@@ -52,6 +52,7 @@ class TestDataServer(unittest.TestCase):
 
         def start_data_server():
             server = MockDataServer()
+            results['subscribed'] = server.check
             server.run()
 
         def subscriber():
@@ -63,7 +64,7 @@ class TestDataServer(unittest.TestCase):
             socket = context.socket(zmq.REQ)
             socket.connect(f'tcp://127.0.0.1:{Config["controller_comm_port"]}')
             socket.send_string('DataServer:MOCK')
-            ports = eval(socket.recv_string())
+            ports = socket.recv_json()
             results['ports'] = ports
             socket.close()
 
@@ -72,7 +73,12 @@ class TestDataServer(unittest.TestCase):
             socket = context.socket(zmq.REQ)
             socket.connect(f'tcp://127.0.0.1:{ports["subscription_port"]}')
             socket.send_string('FX:EURUSD,STK:AAPL')
-            results['ret'] = eval(socket.recv_string())
+            results['ret'] = socket.recv_json()
+
+            # try to double subscribe
+            socket.send_string('FX:EURUSD')
+            socket.recv_json()
+
             socket.close()
 
             # subscribe to data
@@ -90,13 +96,20 @@ class TestDataServer(unittest.TestCase):
         [t.start() for t in threads]
         [t.join() for t in threads]
 
+        # check ports
         self.assertEqual(len(results['ports']), 2)  # return exactly 2 ports
         self.assertDictEqual(results['ret'], {'code': const.DCode.Succeeded.value})
+
+        # check double subscription
+        self.assertEqual(len(results['subscribed']), len(utils.unique(results['subscribed'])))
+
+        # check market data
         headers = [s.split(',')[0] for s in results['msgs']]
         lengths = [len(s.split(',')) for s in results['msgs']]
         self.assertSetEqual(set(headers), {'FX:EURUSD', 'STK:AAPL'})
         self.assertListEqual(lengths, [6] * 4)
 
+        # check data is written to database
         database = Config['postgres_db']
         user = Config['postgres_user']
         password = Config['postgres_pass']

@@ -233,7 +233,7 @@ class TestDataStore(unittest.TestCase):
 
         async def main():
             await store.connect()
-            await store.discount()
+            await store.disconnect()
 
         asyncio.run(main())
 
@@ -260,7 +260,7 @@ class TestDataStore(unittest.TestCase):
             for i in range(5):
                 data = Datum(asset, now + timedelta(minutes=i), 1, 2, 3, 4)
                 await store.append(data)
-            await store.discount()
+            await store.disconnect()
 
         asyncio.run(main())
 

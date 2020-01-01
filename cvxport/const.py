@@ -5,6 +5,10 @@ and choose value that is less informative but shorter in format
 from enum import Enum
 
 
+class JobError(Exception):
+    pass
+
+
 class Freq(Enum):
     """
     Use datetime format code here

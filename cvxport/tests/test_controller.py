@@ -37,7 +37,7 @@ class TestController(unittest.TestCase):
             socket = context.socket(zmq.REQ)
             socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
             socket.send_string('worker1|fake_port')
-            results[0] = eval(socket.recv_string())  # should get {'fake_port': 'controller_port'}
+            results[0] = socket.recv_json()  # should get {'fake_port': 'controller_port'}
             clock[0] = pd.Timestamp.now('EST')  # to check if registration of worker1 gets overridden
 
         def mock_worker2():
@@ -50,7 +50,7 @@ class TestController(unittest.TestCase):
             socket = context.socket(zmq.REQ)
             socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
             socket.send_string('worker2|fake_port1|fake_port2')
-            results[1] = eval(socket.recv_string())  # should get controller_port + 1, + 2
+            results[1] = socket.recv_json()  # should get controller_port + 1, + 2
 
         def mock_worker3():
             """
@@ -62,7 +62,7 @@ class TestController(unittest.TestCase):
             socket = context.socket(zmq.REQ)
             socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
             socket.send_string('worker1|fake_port')
-            results[2] = eval(socket.recv_string())  # should get -1
+            results[2] = socket.recv_json()  # should get -1
 
         def mock_worker4():
             """
@@ -73,7 +73,7 @@ class TestController(unittest.TestCase):
             socket = context.socket(zmq.REQ)
             socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
             socket.send_string('worker4')
-            results[3] = eval(socket.recv_string())
+            results[3] = socket.recv_json()
 
         threads = [threading.Thread(target=worker)
                    for worker in [mock_worker1, mock_worker2, mock_worker3, mock_worker4]]
@@ -112,7 +112,7 @@ class TestController(unittest.TestCase):
             for _ in range(3):
                 time.sleep(0.8)
                 socket.send_string('worker1')
-                result1.append(eval(socket.recv_string()))
+                result1.append(socket.recv_json())
 
         def mock_worker2():
             """
@@ -129,11 +129,11 @@ class TestController(unittest.TestCase):
 
             time.sleep(0.8)
             socket.send_string('worker2')
-            result2.append(eval(socket.recv_string()))
+            result2.append(socket.recv_json())
 
             time.sleep(1.6)
             socket.send_string('worker2')
-            result2.append(eval(socket.recv_string()))
+            result2.append(socket.recv_json())
 
         threads = [threading.Thread(target=worker) for worker in [mock_worker1, mock_worker2]]
         [t.start() for t in threads]
@@ -163,7 +163,7 @@ class TestController(unittest.TestCase):
             socket = context.socket(zmq.REQ)
             socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
             socket.send_string('DataServer:IB|subscription_port|fake_port')
-            results['ds1'] = eval(socket.recv_string())  # should get -2
+            results['ds1'] = socket.recv_json()  # should get -2
 
         def mock_data_server2():
             """
@@ -175,7 +175,7 @@ class TestController(unittest.TestCase):
             socket = context.socket(zmq.REQ)
             socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
             socket.send_string('DataServer:ABC|subscription_port|broadcast_port|fake_port')
-            results['ds2'] = eval(socket.recv_string())  # should get -5
+            results['ds2'] = socket.recv_json()  # should get -5
 
         def mock_data_server3():
             """
@@ -187,7 +187,7 @@ class TestController(unittest.TestCase):
             socket = context.socket(zmq.REQ)
             socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
             socket.send_string('DataServer:IB|subscription_port|broadcast_port|fake_port')
-            results['ds3'] = eval(socket.recv_string())  # should get assignment of the 3 ports
+            results['ds3'] = socket.recv_json()  # should get assignment of the 3 ports
 
         def mock_data_server4():
             """
@@ -199,7 +199,7 @@ class TestController(unittest.TestCase):
             socket = context.socket(zmq.REQ)
             socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
             socket.send_string('DataServer:IB|subscription_port|broadcast_port|fake_port')
-            results['ds4'] = eval(socket.recv_string())  # should get -1
+            results['ds4'] = socket.recv_json()  # should get -1
 
         threads = [threading.Thread(target=worker)
                    for worker in [mock_data_server1, mock_data_server2, mock_data_server3, mock_data_server4]]
@@ -229,7 +229,7 @@ class TestController(unittest.TestCase):
             socket = context.socket(zmq.REQ)
             socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
             socket.send_string('Worker|')
-            results['worker'] = eval(socket.recv_string())  # should get -2
+            results['worker'] = socket.recv_json()  # should get -2
 
         t = threading.Thread(target=mock_worker)
         t.start()

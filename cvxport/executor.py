@@ -4,14 +4,48 @@ import asyncio
 import numpy as np
 import zmq
 import zmq.asyncio as azmq
+from typing import AsyncGenerator, Tuple, Dict, List
+import pandas as pd
 from .data import DataObject
-from .strategy import Strategy
+
+from cvxport import const, JobError, Asset, utils, Config
+from cvxport.strategy import Strategy
+from cvxport.worker import SatelliteWorker
 
 
-class Executor(abc.ABC):
-    def __init__(self, strategy: Strategy, data: DataObject):
+# ==================== Data Connector ====================
+class DataConnector:
+    def __init__(self, broker: const.Broker, freq: const.Freq):
+        self.broker = broker
+        self.freq = freq
+        self.wait_time = Config['subscription_wait_time']
+
+    async def connect(self, socket: azmq.Socket):
+        await socket.send_string(f'DataServer:{self.broker.name}')
+        ports = await utils.wait_for(socket.recv_json(), self.wait_time, JobError('Port request timeout'))  # type: dict
+
+        if ports.get('code', 0) < 0:
+            raise JobError(const.CCode(ports['code']).name)
+
+        return ports
+
+    async def subscribe(self, socket, assets: List[Asset]):
+        msg = ','.join(asset.string for asset in assets)
+        await socket.send_string(msg)
+        reply = await utils.wait_for(socket.recv_json(), self.wait_time, JobError('Data subscription timeout'))
+
+        if ports.get('code', 0) < 0:
+            raise JobError(const.CCode(ports['code']).name)
+
+    async def get_new_bar(self) -> AsyncGenerator[Tuple[pd.Timestamp, Dict[str, np.ndarray]], None]:
+        yield
+
+
+
+class Executor(SatelliteWorker):
+    def __init__(self, strategy: Strategy, broker: const.Broker):
         self.strategy = strategy
-        self.data = data
+        self.broker = broker
         self.data.set_params(strategy.freq, strategy.lookback)  # must set up these before using DataObject
         self.execution_info_queue = asyncio.Queue()
 

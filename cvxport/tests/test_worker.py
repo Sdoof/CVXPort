@@ -5,8 +5,8 @@ import time
 import threading
 import zmq
 
-from cvxport.worker import SatelliteWorker, service, schedulable, JobError
-from cvxport import const
+from cvxport.worker import SatelliteWorker, service, schedulable
+from cvxport import const, JobError
 
 
 # mock class
@@ -58,7 +58,7 @@ class TestSatelliteWorker(unittest.TestCase):
             socket = context.socket(zmq.REP)
             socket.bind(f'tcp://127.0.0.1:{worker.port_map["controller_port"]}')
             socket.recv_string()
-            socket.send_string(str({'code': const.CCode.AlreadyRegistered.value}))
+            socket.send_json({'code': const.CCode.AlreadyRegistered.value})
 
         # start controller
         t = threading.Thread(target=mock_controller)
@@ -91,12 +91,12 @@ class TestSatelliteWorker(unittest.TestCase):
 
             # mock registration
             messages.append(socket.recv_string())
-            socket.send_string(str({'dummy_port': starting_port + 1, 'dummy_port2': starting_port + 2}))
+            socket.send_json({'dummy_port': starting_port + 1, 'dummy_port2': starting_port + 2})
 
             # mock heartbeat
             for _ in range(4):
                 messages.append(socket.recv_string())
-                socket.send_string(str({'code': const.CCode.Succeeded.value}))
+                socket.send_json({'code': const.CCode.Succeeded.value})
 
         t = threading.Thread(target=mock_controller)
         t.start()
@@ -126,9 +126,9 @@ class TestSatelliteWorker(unittest.TestCase):
             socket = context.socket(zmq.REP)
             socket.bind(f'tcp://127.0.0.1:{worker.port_map["controller_port"]}')
             socket.recv_string()
-            socket.send_string('{}')  # MockedWorker doesn't need port assignment
+            socket.send_json({})  # MockedWorker doesn't need port assignment
             socket.recv_string()
-            socket.send_string(str({'code': const.CCode.NotInRegistry.value}))  # mock registration lost
+            socket.send_json({'code': const.CCode.NotInRegistry.value})  # mock registration lost
 
         t = threading.Thread(target=mock_controller)
         t.start()

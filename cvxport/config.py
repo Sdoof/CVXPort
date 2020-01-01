@@ -32,5 +32,5 @@ Config = {
     'postgres_port': 5432,
 
     # ---------- Interactive Brokers ----------
-    'ib_port': 7497,
+    'ib_port': 4002,
 }

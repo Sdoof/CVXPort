@@ -1,16 +1,28 @@
 
-import pystore as ps
-from datetime import datetime
-import pandas as pd
 import time
-import psycopg2 as pg
-from pytz import timezone
+import asyncio
+import zmq
+import threading
 
-con = pg.connect(database='bar_data', user='postgres', password='key', host='127.0.0.1', port=5432)
-cur = con.cursor()
-cur.execute("select * from tick;")
-res = cur.fetchall()
-print(res)
-# res = [item[0] for item in cur.fetchall()]
-con.close()
-print(res[0][1].astimezone(timezone('utc')))
+
+def server():
+    context = zmq.Context()
+    socket = context.socket(zmq.REP)
+    socket.bind('tcp://127.0.0.1:12345')
+    msg = socket.recv_json()
+    print(f'server get {msg}')
+    socket.send_json(msg)
+
+
+def client():
+    context = zmq.Context()
+    socket = context.socket(zmq.REQ)
+    socket.connect('tcp://127.0.0.1:12345')
+    socket.send_json({'abc': 123, 'oh': 'a'})
+    msg = socket.recv_json()
+    print(f'client gets {msg}')
+
+
+threads = [threading.Thread(target=job) for job in [server, client]]
+[t.start() for t in threads]
+[t.join() for t in threads]

@@ -6,7 +6,7 @@ import zmq.asyncio as azmq
 from typing import Callable
 import inspect
 
-from cvxport import utils, Config, const
+from cvxport import utils, Config, const, JobError
 from cvxport.basic_logging import Logger
 
 
@@ -57,11 +57,6 @@ def service(**sockets):
     return wrapper
 
 
-# ==================== Exceptions ====================
-class JobError(Exception):
-    pass
-
-
 # ==================== Main Classes ====================
 class Worker(abc.ABC):
     """
@@ -92,7 +87,7 @@ class Worker(abc.ABC):
         self.port_map = {}
         self.logger.info(f'Starting "{name}" ...')
 
-    def shutdown(self):
+    async def shutdown(self):
         pass
 
     def run(self):
@@ -137,7 +132,11 @@ class Worker(abc.ABC):
             for spec in socket_list:
                 port_name, protocol = spec.split('|')
                 port = self.port_map.get(port_name, None)
-                if port is not None:
+
+                if port == -1:
+                    sockets[spec] = None
+
+                elif port is not None:
                     socket = context.socket(Worker.protocol_map[protocol])
                     address = f'tcp://127.0.0.1:{port}'
 
@@ -174,7 +173,8 @@ class Worker(abc.ABC):
 
                 # TODO: this is hacky. Should restructure the startup and group 2 jobs
                 if group == 2:
-                    self.shutdown()
+                    self.logger.info('\n========== Shutting Down ==========')
+                    await self.shutdown()
 
 
 class SatelliteWorker(Worker):

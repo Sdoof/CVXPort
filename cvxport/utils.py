@@ -6,6 +6,9 @@ import itertools
 import pathlib
 from typing import Iterable, Awaitable, Type
 import asyncio
+import zmq.asyncio as azmq
+
+from cvxport import const, JobError
 
 
 def get_prices(tickers, root_dir, start_date=None, end_date=None) -> dict:
@@ -105,6 +108,25 @@ async def wait_for(awaitable: Awaitable, wait_time: float, exception: Exception)
         return await asyncio.wait_for(awaitable, wait_time)
     except asyncio.TimeoutError:
         raise exception
+
+
+async def wait_for_reply(socket: azmq.Socket, wait_time: float, desc: str):
+    """
+    we duplicate the code from "wait_for" because we intend to totally replace "wait_for"
+
+    :param socket: socket from which we wait for reply
+    :param wait_time: in seconds
+    :param desc: request description, used in raising error
+    """
+    try:
+        reply = await asyncio.wait_for(socket.recv_json(), wait_time)  # type: dict
+    except asyncio.TimeoutError:
+        raise JobError(f'{desc} times out')
+
+    if reply.get('code', 0) < 0:
+        raise JobError(const.CCode(reply['code']).name)
+
+    return reply
 
 
 # ==================== IO Operations ====================

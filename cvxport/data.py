@@ -81,7 +81,7 @@ class DataStore:
         await self._create_table_if_not_exist()
         self.prepared = f'insert into {self.table_name} values($1, $2, $3, $4, $5, $6)'
 
-    async def discount(self):
+    async def disconnect(self):
         await self.con.close()
 
     async def append(self, data: Datum):
