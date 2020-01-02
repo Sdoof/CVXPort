@@ -11,11 +11,11 @@ class JobError(Exception):
 
 class Freq(Enum):
     """
-    Use datetime format code here
+    Values are frequency string
     """
     MONTHLY = 'month'
-    DAILY = 'day'
-    HOURLY = 'hour'
+    DAILY = 'D'
+    HOURLY = 'H'
     MINUTE = '1min'
     MINUTE5 = '5min'
     SECOND5 = '5S'

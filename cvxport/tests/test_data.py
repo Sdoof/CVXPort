@@ -12,7 +12,7 @@ from pytz import timezone
 
 from cvxport import Config
 from cvxport.data import DataStore, Datum, Asset
-from cvxport.data import TickAggregator, TimedBars, BarPanel, MT4DataObject, DownSampledBar
+from cvxport.data import TickAggregator, TimedBars, BarPanel, BarPanel2, MT4DataObject, DownSampledBar, BarCoordinator
 from cvxport.const import Freq, Broker
 from cvxport import const
 
@@ -76,7 +76,7 @@ class TestBar(unittest.TestCase):
         assert_array_equal([1, 2], res[7][4])
 
     def test_bar_panel(self):
-        bars = BarPanel(['usd', 'eur'], Freq.MINUTE, 5)
+        bars = BarPanel2(['usd', 'eur'], Freq.MINUTE, 5)
         res = []
 
         data = [
@@ -288,15 +288,20 @@ class TestDownSampledBar(unittest.TestCase):
         bar = DownSampledBar(const.Freq.MINUTE, const.Freq.SECOND5)
         out = bar.update(data)
         self.assertIsNone(out)
-        self.assertEqual(bar.timestamp, now.ceil('1min'))
-        self.assertEqual(bar.check, now.ceil('1min'))
+        self.assertEqual(bar.timestamp, now.ceil('1min'), 'Internal timestamp should be the ceiling value')
+        self.assertEqual(bar.check, now.ceil('1min'), '"Check" timestamp should be the ceiling value')
         self.assertEqual(bar.open, 1)
         self.assertEqual(bar.close, 4)
 
         bar = DownSampledBar(const.Freq.MINUTE, const.Freq.SECOND5, 2)
         bar.update(data)
-        self.assertEqual(bar.timestamp, now.ceil('1min'))
-        self.assertEqual(bar.check, now.ceil('1min') - pd.Timedelta(seconds=10))
+        if now.second > 50:
+            self.assertEqual(bar.timestamp, (now + pd.Timedelta(seconds=10)).ceil('1min'), 'Offset test wrapped')
+            self.assertEqual(bar.check, (now + pd.Timedelta(seconds=10)).ceil('1min') - pd.Timedelta(seconds=10))
+        else:
+            self.assertEqual(bar.timestamp, now.ceil('1min'), 'Offset test')
+            self.assertEqual(bar.check, now.ceil('1min') - pd.Timedelta(seconds=10))
+
         self.assertEqual(bar.high, 2)
 
     def test_update(self):
@@ -383,6 +388,125 @@ class TestDownSampledBar(unittest.TestCase):
         self.assertEqual(bar.open, 1)
         self.assertEqual(bar.close, 2)
 
+
+class TestBarCoordinator(unittest.TestCase):
+    def test_update(self):
+        a1 = Asset('FX:EURUSD')
+        a2 = Asset('STK:AAPL')
+        bars = BarCoordinator([a1, a2], const.Freq.MINUTE5, const.Freq.SECOND5)
+
+        self.assertIsNone(bars.update(Datum(a1, pd.Timestamp('2019-01-01 12:00:05'), 2, 3, 0, 1)))
+        self.assertIsNone(bars.update(Datum(a2, pd.Timestamp('2019-01-01 12:00:05'), 1, 4, -1, 1)))
+
+        self.assertIsNone(bars.update(Datum(a1, pd.Timestamp('2019-01-01 12:00:10'), 1, 4, 1, 2)))
+        self.assertIsNone(bars.update(Datum(a2, pd.Timestamp('2019-01-01 12:05:00'), 1, 3, -2, 0)))
+        self.assertIn(a2, bars.ready)
+
+        out = bars.update(Datum(a1, pd.Timestamp('2019-01-01 12:05:00'), 2, 3, 0, 1))
+        self.assertEqual(out[0], pd.Timestamp('2019-01-01 12:05:00'))
+        assert_array_equal(out[1], [2, 1])  # open
+        assert_array_equal(out[2], [4, 4])  # high
+        assert_array_equal(out[3], [0, -2])  # low
+        assert_array_equal(out[4], [1, 0])  # close
+        self.assertIsNone(bars.check)
+        assert_array_equal(bars.opens, [np.nan, np.nan])
+
+        # test consecutive bars
+        self.assertIsNone(bars.update(Datum(a1, pd.Timestamp('2019-01-01 12:10:00'), 2, 3, 0, 1)))
+        out = bars.update(Datum(a2, pd.Timestamp('2019-01-01 12:10:00'), 3, 4, 0, 2))
+        self.assertEqual(out[0], pd.Timestamp('2019-01-01 12:10:00'))
+        assert_array_equal(out[1], [2, 3])  # open
+        assert_array_equal(out[2], [3, 4])  # high
+        assert_array_equal(out[3], [0, 0])  # low
+        assert_array_equal(out[4], [1, 2])  # close
+
+    def test_skipped(self):
+        a1 = Asset('FX:EURUSD')
+        a2 = Asset('STK:AAPL')
+        bars = BarCoordinator([a1, a2], const.Freq.MINUTE5, const.Freq.SECOND5)
+
+        self.assertIsNone(bars.update(Datum(a1, pd.Timestamp('2019-01-01 12:00:05'), 2, 3, 0, 1)))
+        self.assertIsNone(bars.update(Datum(a2, pd.Timestamp('2019-01-01 12:00:05'), 1, 4, -1, 1)))
+
+        self.assertIsNone(bars.update(Datum(a1, pd.Timestamp('2019-01-01 12:00:10'), 1, 4, 1, 2)))
+        self.assertIsNone(bars.update(Datum(a2, pd.Timestamp('2019-01-01 12:05:00'), 1, 3, -2, 0)))
+        self.assertIn(a2, bars.ready)
+
+        out = bars.update(Datum(a1, pd.Timestamp('2019-01-01 12:05:10'), 2, 3, 0, 1))
+        self.assertEqual(out[0], pd.Timestamp('2019-01-01 12:05:00'))
+        assert_array_equal(out[1], [2, 1])  # open
+        assert_array_equal(out[2], [4, 4])  # high
+        assert_array_equal(out[3], [0, -2])  # low
+        assert_array_equal(out[4], [2, 0])  # close
+        self.assertEqual(bars.check, pd.Timestamp('2019-01-01 12:10:00'))
+        self.assertEqual(bars.timestamp, pd.Timestamp('2019-01-01 12:10:00'))
+        self.assertEqual(bars.data[a1].open, 2)
+        self.assertEqual(bars.data[a2].open, None)
+
+        # TODO: test skip bars that land on next reset
+        # out = bars.update(Datum(a1, pd.Timestamp('2019-01-01 12:15:00'), 2, 3, 0, 1))
+        # self.assertEqual(out[0], pd.Timestamp('2019-01-01 12:15:00'))
+
+    def test_offset(self):
+        a1 = Asset('FX:EURUSD')
+        a2 = Asset('STK:AAPL')
+        bars = BarCoordinator([a1, a2], const.Freq.MINUTE5, const.Freq.SECOND5, 1)
+
+        self.assertIsNone(bars.update(Datum(a1, pd.Timestamp('2019-01-01 12:00:00'), 2, 3, 0, 1)))
+        self.assertIsNone(bars.update(Datum(a2, pd.Timestamp('2019-01-01 12:00:00'), 1, 4, -1, 1)))
+
+        self.assertIsNone(bars.update(Datum(a1, pd.Timestamp('2019-01-01 12:00:05'), 1, 4, 1, 2)))
+        self.assertIsNone(bars.update(Datum(a2, pd.Timestamp('2019-01-01 12:04:55'), 1, 3, -2, 0)))
+        self.assertIn(a2, bars.ready)
+
+        out = bars.update(Datum(a1, pd.Timestamp('2019-01-01 12:04:55'), 2, 3, 0, 1))
+        self.assertEqual(out[0], pd.Timestamp('2019-01-01 12:05:00'))
+        assert_array_equal(out[1], [2, 1])  # open
+        assert_array_equal(out[2], [4, 4])  # high
+        assert_array_equal(out[3], [0, -2])  # low
+        assert_array_equal(out[4], [1, 0])  # close
+        self.assertIsNone(bars.check)
+        assert_array_equal(bars.opens, [np.nan, np.nan])
+
+        # test consecutive bars
+        self.assertIsNone(bars.update(Datum(a1, pd.Timestamp('2019-01-01 12:09:55'), 2, 3, 0, 1)))
+        out = bars.update(Datum(a2, pd.Timestamp('2019-01-01 12:09:55'), 3, 4, 0, 2))
+        self.assertEqual(out[0], pd.Timestamp('2019-01-01 12:10:00'))
+        assert_array_equal(out[1], [2, 3])  # open
+        assert_array_equal(out[2], [3, 4])  # high
+        assert_array_equal(out[3], [0, 0])  # low
+        assert_array_equal(out[4], [1, 2])  # close
+
+
+class TestBarPanel(unittest.TestCase):
+    def test_update(self):
+        a1 = Asset('FX:EURUSD')
+        a2 = Asset('STK:AAPL')
+        panel = BarPanel([a1, a2], const.Freq.MINUTE5, const.Freq.SECOND5, 2)
+
+        self.assertIsNone(panel.update(Datum(a1, pd.Timestamp('2019-01-01 12:05:00'), 1, 2, -1, 0)))
+        out = panel.update(Datum(a2, pd.Timestamp('2019-01-01 12:05:00'), 1, 2, 0, 1))
+        self.assertEqual(out[0], pd.Timestamp('2019-01-01 12:05:00'))
+        assert_array_equal(out[1]['open'], [[1, 1]])
+        assert_array_equal(out[1]['high'], [[2, 2]])
+        assert_array_equal(out[1]['low'], [[-1, 0]])
+        assert_array_equal(out[1]['close'], [[0, 1]])
+
+        self.assertIsNone(panel.update(Datum(a1, pd.Timestamp('2019-01-01 12:10:00'), 2, 3, 0, 1)))
+        out = panel.update(Datum(a2, pd.Timestamp('2019-01-01 12:10:00'), 1, 2, 0, 1))
+        self.assertEqual(out[0], pd.Timestamp('2019-01-01 12:10:00'))
+        assert_array_equal(out[1]['open'], [[1, 1], [2, 1]])
+        assert_array_equal(out[1]['high'], [[2, 2], [3, 2]])
+        assert_array_equal(out[1]['low'], [[-1, 0], [0, 0]])
+        assert_array_equal(out[1]['close'], [[0, 1], [1, 1]])
+
+        self.assertIsNone(panel.update(Datum(a1, pd.Timestamp('2019-01-01 12:15:00'), 2, 3, 0, 1)))
+        out = panel.update(Datum(a2, pd.Timestamp('2019-01-01 12:15:00'), 1, 2, 0, 1))
+        self.assertEqual(out[0], pd.Timestamp('2019-01-01 12:15:00'))
+        assert_array_equal(out[1]['open'], [[2, 1], [2, 1]])
+        assert_array_equal(out[1]['high'], [[3, 2], [3, 2]])
+        assert_array_equal(out[1]['low'], [[0, 0], [0, 0]])
+        assert_array_equal(out[1]['close'], [[1, 1], [1, 1]])
 
 if __name__ == '__main__':
     unittest.main()
