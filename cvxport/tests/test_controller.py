@@ -174,7 +174,7 @@ class TestController(unittest.TestCase):
             # noinspection PyUnresolvedReferences
             socket = context.socket(zmq.REQ)
             socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
-            socket.send_string('DataServer:ABC|subscription_port|broadcast_port|fake_port')
+            socket.send_string('DataServer:ABC|subscription_port|data_port|order_port|fake_port')
             results['ds2'] = socket.recv_json()  # should get -5
 
         def mock_data_server3():
@@ -186,7 +186,7 @@ class TestController(unittest.TestCase):
             # noinspection PyUnresolvedReferences
             socket = context.socket(zmq.REQ)
             socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
-            socket.send_string('DataServer:IB|subscription_port|broadcast_port|fake_port')
+            socket.send_string('DataServer:IB|subscription_port|data_port|order_port|fake_port')
             results['ds3'] = socket.recv_json()  # should get assignment of the 3 ports
 
         def mock_data_server4():
@@ -198,7 +198,7 @@ class TestController(unittest.TestCase):
             # noinspection PyUnresolvedReferences
             socket = context.socket(zmq.REQ)
             socket.connect(f'tcp://127.0.0.1:{controller.port_map["controller_port"]}')
-            socket.send_string('DataServer:IB|subscription_port|broadcast_port|fake_port')
+            socket.send_string('DataServer:IB|subscription_port|data_port|order_port|fake_port')
             results['ds4'] = socket.recv_json()  # should get -1
 
         threads = [threading.Thread(target=worker)
@@ -212,9 +212,9 @@ class TestController(unittest.TestCase):
         self.assertDictEqual(results['ds2'], {'code': const.CCode.UnKnownBroker.value})
         self.assertDictEqual(results['ds4'], {'code': const.CCode.AlreadyRegistered.value})
 
-        self.assertSetEqual(set(results['ds3'].keys()), {'subscription_port', 'broadcast_port', 'fake_port'})
+        self.assertSetEqual(set(results['ds3'].keys()), {'subscription_port', 'data_port', 'order_port', 'fake_port'})
         self.assertDictEqual(results['ds3'], controller.data_servers['IB'])
-        self.assertEqual(sum(results['ds3'].values()), 3 * port + 3)
+        self.assertEqual(sum(results['ds3'].values()), 4 * port + 6)
 
     def test_registration_without_port(self):
         controller = MockedController('con4')

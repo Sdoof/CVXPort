@@ -63,6 +63,11 @@ class Datum:
                f'{self.open},{self.high},{self.low},{self.close}'
 
 
+def str_to_datum(string: str) -> Datum:
+    asset_string, date_string, opn, high, low, close = string.split(',')
+    return Datum(Asset(asset_string), pd.Timestamp(date_string), float(opn), float(high), float(low), float(close))
+
+
 class DataStore:
     def __init__(self, broker: const.Broker, freq: const.Freq):
         self.broker = broker
@@ -101,6 +106,44 @@ class DataStore:
             )
         """
         await self.con.execute(sql)
+
+
+class EquityCurve:
+    def __init__(self, assets: List[Asset], capital):
+        self.asset_strings = [asset.string for asset in assets]
+        self.capital= capital
+        self.N = len(assets)
+        self.market_values = [np.zeros(self.N + 1)]
+        self.market_values[0][-1] = capital  # last column is cash
+        self.commissions = [np.zeros(self.N)]
+        self.shares = [np.zeros(self.N)]
+        self.timestamps = []  # type: List[pd.Timestamp]
+
+    def update(self, timestamp: pd.Timestamp, executions: dict, prices: np.ndarray):
+        """
+        executions is of the form {'asset1': [shares, price, commission], ...}
+        we assume the execution
+
+        :param timestamp: time of executions
+        :param executions: information of executions
+        :param prices: MTM prices to fill in empty executions. Should have the same ordering as assets
+        """
+        cash = self.market_values[-1][-1]
+        market_values = np.zeros(self.N + 1)
+        commissions = np.zeros(self.N)
+        shares = np.zeros(self.N)
+        for idx, asset in enumerate(self.asset_strings):
+            exe = executions[asset] if asset in executions else [0, prices[idx], 0]
+            shares[idx] = self.shares[-1][idx] + exe[0]
+            market_values[idx] = shares[idx] * exe[1]  # assume executed price is the market price
+            commissions[idx] = exe[2]
+            cash -= exe[0] * exe[1]  # delta * price
+
+        market_values[-1] = cash
+        self.shares.append(shares)
+        self.market_values.append(market_values)
+        self.commissions.append(commissions)
+        self.timestamps.append(timestamp)
 
 
 class DataObject(abc.ABC):

@@ -7,12 +7,12 @@ import zmq.asyncio as azmq
 import zmq
 import asyncio
 import psycopg2 as pg
-from datetime import datetime, timedelta
 from pytz import timezone
 
 from cvxport import Config
 from cvxport.data import DataStore, Datum, Asset
 from cvxport.data import TickAggregator, TimedBars, BarPanel, BarPanel2, MT4DataObject, DownSampledBar, BarCoordinator
+from cvxport.data import EquityCurve
 from cvxport.const import Freq, Broker
 from cvxport import const
 
@@ -254,12 +254,12 @@ class TestDataStore(unittest.TestCase):
     def test_insertion(self):
         asset = Asset('FX:ABC')
         store = DataStore(Broker.MOCK, Freq.MINUTE)  # tick is not used and for testing purpose
-        now = datetime.utcnow().replace(tzinfo=timezone('UTC'))
+        now = pd.Timestamp.utcnow()
 
         async def main():
             await store.connect()
             for i in range(5):
-                data = Datum(asset, now + timedelta(minutes=i), 1, 2, 3, 4)
+                data = Datum(asset, now + pd.Timedelta(minutes=i), 1, 2, 3, 4)
                 await store.append(data)
             await store.disconnect()
 
@@ -307,7 +307,6 @@ class TestDownSampledBar(unittest.TestCase):
     def test_update(self):
         asset = Asset('FX:EURUSD')
         now = pd.Timestamp('2019-01-01 12:01:00')
-        delta = pd.Timedelta(seconds=5)
         data = Datum(asset, now, 1, 2, 3, 4)
         bar = DownSampledBar(const.Freq.MINUTE, const.Freq.SECOND5)
 
@@ -331,7 +330,7 @@ class TestDownSampledBar(unittest.TestCase):
         self.assertEqual(out, (pd.Timestamp('2019-01-01 12:03:00'), 1, 5, -1, 1))
 
         # test skip update
-        self.assertIsNone(bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:04:05'), 1, 3, 0, 2)))  # skip from the 3rd minute
+        self.assertIsNone(bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:04:05'), 1, 3, 0, 2)))
         out = bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:05:05'), 2, 4, 1, 1))  # skip from the 4th minute
         self.assertTupleEqual(out, (pd.Timestamp('2019-01-01 12:05:00'), 1, 3, 0, 2))
         self.assertEqual(bar.timestamp, pd.Timestamp('2019-01-01 12:06:00'))
@@ -342,7 +341,6 @@ class TestDownSampledBar(unittest.TestCase):
     def test_offset(self):
         asset = Asset('FX:EURUSD')
         now = pd.Timestamp('2019-01-01 12:00:55')  # start from the last bar
-        delta = pd.Timedelta(seconds=5)
         bar = DownSampledBar(const.Freq.MINUTE, const.Freq.SECOND5, offset=1)
 
         # test start
@@ -366,7 +364,6 @@ class TestDownSampledBar(unittest.TestCase):
 
     def test_5minute(self):
         asset = Asset('FX:EURUSD')
-        delta = pd.Timedelta(seconds=5)
         bar = DownSampledBar(const.Freq.MINUTE5, const.Freq.SECOND5, offset=1)
 
         # test start
@@ -507,6 +504,22 @@ class TestBarPanel(unittest.TestCase):
         assert_array_equal(out[1]['high'], [[3, 2], [3, 2]])
         assert_array_equal(out[1]['low'], [[0, 0], [0, 0]])
         assert_array_equal(out[1]['close'], [[1, 1], [1, 1]])
+
+
+class TestEquityCurve(unittest.TestCase):
+    def test_equity(self):
+        a1 = 'STK:AAPL'
+        a2 = 'STK:MSFT'
+        assets = [Asset(a1), Asset(a2)]
+        equity = EquityCurve(assets, 10000)
+        equity.update(pd.Timestamp('2019-01-01'), {a1: [10, 200, 10], a2: [100, 50, 5]}, np.array([200, 50]))
+        equity.update(pd.Timestamp('2019-01-02'), {a1: [-5, 250, 5], a2: [-80, 45, 5]}, np.array([250, 45]))
+        equity.update(pd.Timestamp('2019-01-02'), {a1: [-10, 220, 10]}, np.array([220, 60]))
+        assert_array_equal(equity.market_values, [[0, 0, 10000], [2000, 5000, 3000], [1250, 900, 7850],
+                                                  [-1100, 1200, 10050]])
+        assert_array_equal(equity.shares, [[0, 0], [10, 100], [5, 20], [-5, 20]])
+        assert_array_equal(equity.commissions, [[0, 0], [10, 5], [5, 5], [10, 0]])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,13 +1,16 @@
-1. data server - IB
-2. Better heartbeat handling - register / exit / lost connection - or change the whole mechanism as "connection"
+1. run baseline strategy live
+2. better performance recording / analysis
 3. improve controller http
-4. error handling with asyncio?
-5. run baseline strategy live
-6. better performance recording / analysis
-7. if need to write pullin code multiple times. why not build a new socket class to wrap it up?
+
+Design
+1. put most of the portfolio analytics under executor so that backtester can reuse without going thru controller, etc.
 
 Check Asyncio notes in Risk Premia Parity in OneNote
 
 Asyncio Notes
 1. asyncio.Queue is better defined inside coroutine so that it will retrieve the correct event loop
 2. asyncio.run will create a new loop in each run. Coroutine defined outside will fall in another loop and not be run
+
+TODO: Add record timestamp to database
+TODO: drop backward filling bar in DownSampledBar
+TODO: why 0 commission? because there is no fill?

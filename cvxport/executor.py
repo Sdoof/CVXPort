@@ -1,141 +1,96 @@
 
-import abc
-import asyncio
 import numpy as np
-import zmq
 import zmq.asyncio as azmq
-from typing import AsyncGenerator, Tuple, Dict, List
-import pandas as pd
-from .data import DataObject
+from typing import List
 
-from cvxport import const, JobError, Asset, utils, Config
+from cvxport import const, Asset, utils, Config
+from cvxport.data import str_to_datum, BarPanel, EquityCurve
 from cvxport.strategy import Strategy
-from cvxport.worker import SatelliteWorker
+from cvxport.worker import SatelliteWorker, startup, schedulable, service
 
 
 # ==================== Data Connector ====================
-class DataConnector:
-    def __init__(self, broker: const.Broker, freq: const.Freq):
-        self.broker = broker
-        self.freq = freq
-        self.wait_time = Config['subscription_wait_time']
+class Executor(SatelliteWorker):
+    """
+    Simplify to only 2 type of execution strategies
+    1. All or nothing
+    2. Allow partial fill
 
+    Data server should return the number of shares filled in both cases
+    """
+    def __init__(self, strategy: Strategy, broker: const.Broker, capital):
+        super(Executor, self).__init__(f'Executor:{strategy.name}')
+        self.strategy = strategy
+        self.broker = broker
+        self.asset_strings = [asset.string for asset in strategy.assets]
+        self.positions = np.zeros(len(self.strategy.assets))
+
+        # communication setup
+        self.wait_time = Config['subscription_wait_time']
+        self.port_map.update({'controller_comm_port': Config['controller_comm_port']})
+
+        # data structure setup
+        # noinspection PyTypeChecker
+        self.panel = None  # type: BarPanel
+        self.equity_curve = EquityCurve(strategy.assets, capital)
+
+    # -------------------- Startup --------------------
+    @startup(socket='controller_comm_port|REQ')
     async def connect(self, socket: azmq.Socket):
         """
         Ask for ports of data server
         """
         await socket.send_string(f'DataServer:{self.broker.name}')
-        return await utils.wait_for_reply(socket, self.wait_time, const.CCode, 'Port request')  # type: dict
+        struct = await utils.wait_for_reply(socket, self.wait_time, const.CCode, 'Port request')  # type: dict
 
-    async def subscribe(self, sub_socket: azmq.Socket, broadcast_socket: azmq.Socket, assets: List[Asset]):
+        # setup panel
+        strategy = self.strategy
+        # self.panel = BarPanel(strategy.assets, strategy.freq, const.Freq(struct['freq']), strategy.lookback)
+        self.panel = BarPanel(strategy.assets, strategy.freq, const.Freq.SECOND5, strategy.lookback)
+
+        # update port map
+        # del struct['freq']
+        self.port_map.update(struct)
+
+    # -------------------- Set up in 2nd stage --------------------
+    @schedulable(sub_socket='subscription_port|REQ', broadcast_socket='data_port|SUB')
+    async def subscribe(self, sub_socket: azmq.Socket, broadcast_socket: azmq.Socket):
         """
-        Send subscription request to data server
-        This job should be run as schedulable in stage 2 with subscription socket and broadcast_socket
+        Send subscription request to data server and subscribe
         """
         # send subscription
-        msg = ','.join(asset.string for asset in assets)
+        msg = ','.join(self.asset_strings)
+        self.logger.info(f'Subscribing {msg}')
+
         await sub_socket.send_string(msg)
         await utils.wait_for_reply(sub_socket, self.wait_time, const.DCode, 'Data subscription')  # use DCode
 
         # subscribe to ticker
-        for asset in assets:
-            broadcast_socket.subscribe(asset.string)
+        for asset_string in self.asset_strings:
+            broadcast_socket.subscribe(asset_string)
 
-    async def get_new_bar(self) -> AsyncGenerator[Tuple[pd.Timestamp, Dict[str, np.ndarray]], None]:
-        yield
+    # -------------------- Main loop to generate signal --------------------
+    @service(data_socket='data_port|SUB', order_socket='order_port|REQ')
+    async def run_strategy(self, data_socket: azmq.Socket, order_socket: azmq.Socket):
+        bars = self.panel.update(str_to_datum(await data_socket.recv_string()))
+        if bars is not None:
+            timestamp, prices = bars
+            new_positions = self.strategy.generate_positions(timestamp, prices)
+            if new_positions is not None:
+                # round towards 0 to avoid over-execution
+                position_delta = np.fix(new_positions - self.positions)
 
-
-class Executor(SatelliteWorker):
-    def __init__(self, strategy: Strategy, broker: const.Broker):
-        self.strategy = strategy
-        self.broker = broker
-        self.data.set_params(strategy.freq, strategy.lookback)  # must set up these before using DataObject
-        self.execution_info_queue = asyncio.Queue()
-
-    def run(self):
-        asyncio.run(self._run_all())
-
-    # ==================== To Override ====================
-    @abc.abstractmethod
-    async def _execute_order(self, shares: np.ndarray) -> dict:
-        """
-        Execute orders as specified per "shares"
-
-        :param np.ndarray shares:
-        :return: information of execution
-        """
-        pass
-
-    @abc.abstractmethod
-    async def _get_current_position(self) -> np.ndarray:
-        """
-        Return current open position
-
-        :return: current open position
-        """
-        pass
-
-    # ==================== Routines ====================
-    async def _run_strategy(self):
-        """
-        Main executor loop. Ingest data into strategy and execute position per strategy calculation
-        """
-        async for timestamp, subset in self.data():
-            new_position = self.strategy(timestamp, subset)
-            if new_position is not None:  # strategy may not generate position for each data update
-                curr_position = await self._get_current_position()
-
-                # round towards 0 to avoid overflow
-                position_delta = np.fix(new_position - curr_position)
-
-                # shouldn't use queue for execution because in backtest we need instant execution
-                execution_info = await self._execute_position(position_delta)
+                # send order
+                order = {k: v for k, v in zip(self.asset_strings, position_delta) if abs(v) >= 1}
+                order['Strategy'] = self.name
+                order_socket.send_json(order)
+                # executions = await utils.wait_for_reply(order_socket, self.wait_time, const.DCode, 'Order execution')
+                executions = await utils.wait_for_reply(order_socket, 60, const.DCode, 'Order execution')
 
                 # for post processing
-                await self.execution_info_queue.put(execution_info)
+                self.equity_curve.update(timestamp, executions, prices['close'][-1])
 
-    async def _process_execution_info(self):
-        """
-        Consume execution info from queue and post-process the info
-        """
-        while True:
-            info = await self.execution_info_queue.get()
-
-    async def _process_request(self):
-        """
-        Handle requests from zeromq
-        """
-        while True:
-            a = 1
-
-    async def _run_all(self):
-        """
-        Start all the routines
-        """
-        self.strategy_daemon = self._run_strategy()  # get handle so that we can cancel the coroutine later
-        self.info_daemon = self._process_execution_info()  # get handle so that we can cancel the coroutine later
-        # _process_request is the main controller. no need for handle
-        await asyncio.gather(self._process_request(), self.strategy_daemon, self.info_daemon)
+            else:
+                self.equity_curve.update(timestamp, {}, prices['close'][-1])
 
 
-class MT4Executor(Executor):
-    def __init__(self, strategy: Strategy, data: DataObject, in_port, out_port):
-        super(MT4Executor, self).__init__(strategy, data)
-
-        self.tickers = data.tickers
-
-        self.context = azmq.Context()
-        self.in_socket = self.context.socket(zmq.PULL)
-        self.in_socket.connect(f'tcp://127.0.0.1:{in_port}')
-        self.out_socket = self.context.socket(zmq.PUSH)
-        self.out_socket.connect(f'tcp://127.0.0.1:{out_port}')
-
-    async def _execute_order(self, shares: np.ndarray) -> dict:
-        for ticker, share in zip(self.tickers, shares):
-            if abs(share) >= 1:
-                order = ''
-                await self.out_socket.send_string(order)
-                reply = await eval(self.in_socket.recv_string())
-
-        for _ in range(len(shares)):
-            pass

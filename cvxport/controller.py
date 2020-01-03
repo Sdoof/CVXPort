@@ -64,7 +64,7 @@ class Controller(Worker):
                     await socket.send_json({'code': const.CCode.UnKnownBroker.value})
                     return
 
-                if 'subscription_port' not in ports or 'broadcast_port' not in ports:
+                if 'subscription_port' not in ports or 'data_port' not in ports or 'order_port' not in ports:
                     await socket.send_json({'code': const.CCode.MissingRequiredPort.value})
                     return
 
@@ -128,10 +128,10 @@ class Controller(Worker):
     @service(socket='controller_comm_port|REP')
     async def handle_communication(self, socket: azmq.Socket):
         msg = await socket.recv_string()  # type: str
+        self.logger.info(f'Receive Data Server request {msg}')
         if msg.startswith('DataServer:'):
             if msg in self.registry:
-                ports = self.data_servers[msg.split(':')[1]]
-                await socket.send_json({p: n for p, n in ports.items() if p in ['subscription_port', 'broadcast_port']})
+                await socket.send_json(self.data_servers[msg.split(':')[1]])
             else:
                 await socket.send_json({'code': const.CCode.ServerNotOnline.value})
         else:

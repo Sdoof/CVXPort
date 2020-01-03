@@ -1,12 +1,12 @@
 
 import unittest
-from datetime import datetime
 import asyncio
 from typing import List
 import threading
 import zmq
 import time
 import psycopg2 as pg
+import pandas as pd
 
 from cvxport import const, JobError, Config, utils
 from cvxport.data import Asset, Datum
@@ -23,10 +23,13 @@ class MockDataServer(DataServer):
     async def subscribe(self, assets: List[Asset]):
         self.check += assets  # for testing double subscription
 
+    async def execute(self, order: dict) -> dict:
+        return {asset: [0, 100, 0] for asset in order}
+
     @service()
     async def emit_data(self):
         for asset in self.subscribed:
-            await self.data_queue.put(Datum(asset, datetime.now(), 2, 3, 0, 1))
+            await self.data_queue.put(Datum(asset, pd.Timestamp.utcnow(), 2, 3, 0, 1))
         await asyncio.sleep(0.5)
 
     @schedulable()
@@ -85,19 +88,26 @@ class TestDataServer(unittest.TestCase):
             # noinspection PyUnresolvedReferences
             socket = context.socket(zmq.SUB)
             [socket.subscribe(name) for name in ['FX:EURUSD', 'STK:AAPL']]
-            socket.connect(f'tcp://127.0.0.1:{ports["broadcast_port"]}')
+            socket.connect(f'tcp://127.0.0.1:{ports["data_port"]}')
             msgs = []
             for _ in range(4):
                 msgs.append(socket.recv_string())
             socket.close()
             results['msgs'] = msgs
 
+            # execute order
+            socket = context.socket(zmq.REQ)
+            socket.connect(f'tcp://127.0.0.1:{ports["order_port"]}')
+            socket.send_json({'FX:EURUSD': -5})  # sell 5 shares
+            results['executions'] = socket.recv_json()
+            socket.close()
+
         threads = [threading.Thread(target=func) for func in [start_controller, start_data_server, subscriber]]
         [t.start() for t in threads]
         [t.join() for t in threads]
 
         # check ports
-        self.assertEqual(len(results['ports']), 2)  # return exactly 2 ports
+        self.assertEqual(len(results['ports']), 3)  # return exactly 2 ports
         self.assertDictEqual(results['ret'], {'code': const.DCode.Succeeded.value})
 
         # check double subscription
@@ -108,6 +118,9 @@ class TestDataServer(unittest.TestCase):
         lengths = [len(s.split(',')) for s in results['msgs']]
         self.assertSetEqual(set(headers), {'FX:EURUSD', 'STK:AAPL'})
         self.assertListEqual(lengths, [6] * 4)
+
+        # check executions
+        self.assertDictEqual(results['executions'], {'FX:EURUSD': [0, 100, 0]})
 
         # check data is written to database
         database = Config['postgres_db']
