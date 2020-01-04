@@ -1,7 +1,6 @@
 
-from cvxport.data import Asset
-import json
+def func(ind):
+    print('yes')
+    return ind
 
-a = {Asset('FX:EURUSD'): 1}
-msg = json.dumps(a)
-print(msg)
+print(all(func(i) for i in [1, 0, 1]))

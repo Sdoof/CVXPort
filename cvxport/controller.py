@@ -64,7 +64,8 @@ class Controller(Worker):
                     await socket.send_json({'code': const.CCode.UnKnownBroker.value})
                     return
 
-                if 'subscription_port' not in ports or 'data_port' not in ports or 'order_port' not in ports:
+                if any(port not in ports
+                       for port in ['subscription_port', 'data_port', 'order_port']):
                     await socket.send_json({'code': const.CCode.MissingRequiredPort.value})
                     return
 

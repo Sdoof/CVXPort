@@ -19,25 +19,25 @@ def run_servers(data_server_class: Type[DataServer], broker: const.Broker, strat
     results = {}
 
     # noinspection PyAbstractClass
-    class MockedDataServer(data_server_class):
-        @schedulable()
-        async def kill(self):
-            await asyncio.sleep(duration)
-            raise JobError('Killed')
-
-    class MockedController(Controller):
-        @schedulable()
-        async def kill(self):
-            await asyncio.sleep(duration)
-            raise JobError('Killed')
+    # class MockedDataServer(data_server_class):
+    #     @schedulable()
+    #     async def kill(self):
+    #         await asyncio.sleep(duration)
+    #         raise JobError('Killed')
+    #
+    # class MockedController(Controller):
+    #     @schedulable()
+    #     async def kill(self):
+    #         await asyncio.sleep(duration)
+    #         raise JobError('Killed')
 
     def run_controller():
-        controller = MockedController()
+        controller = Controller()
         controller.run()
 
     def run_data_server():
         # noinspection PyArgumentList
-        server = MockedDataServer()
+        server = IBDataServer()
         server.run()
 
     def run_executor():
@@ -51,5 +51,5 @@ def run_servers(data_server_class: Type[DataServer], broker: const.Broker, strat
 
 
 if __name__ == '__main__':
-    strat = RandomStrategy([Asset('FX:EURUSD')], const.Freq.SECOND10, 10000)
+    strat = RandomStrategy([Asset('FX:EURUSD')], const.Freq.MINUTE5, 10000)
     run_servers(IBDataServer, const.Broker.IB, strat, 600)

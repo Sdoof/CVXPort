@@ -8,6 +8,7 @@ import zmq
 import asyncio
 import psycopg2 as pg
 from pytz import timezone
+from datetime import datetime
 
 from cvxport import Config
 from cvxport.data import DataStore, Datum, Asset
@@ -273,8 +274,9 @@ class TestDataStore(unittest.TestCase):
         cur = con.cursor()
         cur.execute(f'select * from {store.table_name}')
         res = cur.fetchall()
-        self.assertTupleEqual(res[0][2:], (1.0, 2.0, 3.0, 4.0))
         self.assertEqual(res[0][1].astimezone(timezone('EST')), now.astimezone(timezone('EST')))
+        self.assertIsInstance(res[0][2], datetime)
+        self.assertTupleEqual(res[0][3:], (1.0, 2.0, 3.0, 4.0))
         cur.execute(f'drop table {store.table_name}')
         con.commit()
         con.close()
@@ -337,6 +339,29 @@ class TestDownSampledBar(unittest.TestCase):
         self.assertEqual(bar.open, 2)
         self.assertEqual(bar.high, 4)
         self.assertEqual(bar.close, 1)
+
+    def test_high_water_mark(self):
+        asset = Asset('FX:EURUSD')
+        bar = DownSampledBar(const.Freq.MINUTE, const.Freq.SECOND5)
+
+        # test corner case where the starting point is the last bar
+        out = bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:01:00'), 1, 2, 3, 4))
+        self.assertTupleEqual(out, (pd.Timestamp('2019-01-01 12:01:00'), 1, 2, 3, 4))
+        self.assertIsNone(bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:01:00'), 1, 2, 3, 4)))
+        self.assertEqual(bar.high_water_mark, pd.Timestamp('2019-01-01 12:01:00'))
+
+        # test consecutive update
+        bar = DownSampledBar(const.Freq.MINUTE, const.Freq.SECOND5)
+        self.assertIsNone(bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:01:50'), 1, 2, 3, 4)))
+        self.assertIsNone(bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:01:55'), 1, 2, 3, 4)))
+        self.assertIsNone(bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:01:55'), 1, 10, 0, 2)))
+        self.assertEqual(bar.high, 2)
+        self.assertEqual(bar.low, 3)
+        self.assertEqual(bar.close, 4)
+        self.assertIsNotNone(bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:02:00'), 1, 2, 3, 4)))
+        self.assertIsNone(bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:02:00'), 1, 2, 3, 4)))
+        self.assertIsNone(bar.update(Datum(asset, pd.Timestamp('2019-01-01 12:02:05'), 1, 2, 3, 4)))
+
 
     def test_offset(self):
         asset = Asset('FX:EURUSD')

@@ -84,25 +84,27 @@ class DataStore:
 
         self.con = await apg.connect(database=database, user=user, password=password, host='127.0.0.1', port=port)
         await self._create_table_if_not_exist()
-        self.prepared = f'insert into {self.table_name} values($1, $2, $3, $4, $5, $6)'
+        self.prepared = f'insert into {self.table_name} values($1, $2, $3, $4, $5, $6, $7)'
 
     async def disconnect(self):
         await self.con.close()
 
     async def append(self, data: Datum):
         await self.con.execute(self.prepared,
-                               data.asset.string, data.timestamp, data.open, data.high, data.low, data.close)
+                               data.asset.string, data.timestamp, pd.Timestamp.utcnow(),
+                               data.open, data.high, data.low, data.close)
 
     async def _create_table_if_not_exist(self):
         sql = f"""
             create table if not exists {self.table_name}(
                 asset varchar(16) not null,
                 timestamp timestamp with time zone not null,
+                record_time timestamp with time zone not null,
                 open double precision not null,
                 high double precision not null,
                 low double precision not null,
                 close double precision not null,
-                primary key(asset, timestamp)
+                primary key(asset, timestamp, record_time)
             )
         """
         await self.con.execute(sql)
@@ -402,6 +404,7 @@ class DownSampledBar:
 
         self.timestamp = None
         self.check = pd.Timestamp.min
+        self.high_water_mark = pd.Timestamp.min
         self.open = None
         self.high = -np.inf
         self.low = np.inf
@@ -419,6 +422,13 @@ class DownSampledBar:
         """
         TODO: We don't deal with the situation where the new skip bar data happens to hit the check
         """
+        # to avoid duplicated or obsolete bar
+        if data.timestamp <= self.high_water_mark:
+            return None
+
+        self.high_water_mark = data.timestamp
+
+        # deal with update by cases
         if data.timestamp == self.check:
             self._update(data)
             opn, high, low, close = self.open, self.high, self.low, self.close

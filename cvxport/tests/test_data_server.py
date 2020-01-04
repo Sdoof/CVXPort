@@ -23,8 +23,8 @@ class MockDataServer(DataServer):
     async def subscribe(self, assets: List[Asset]):
         self.check += assets  # for testing double subscription
 
-    async def execute(self, order: dict) -> dict:
-        return {asset: [0, 100, 0] for asset in order}
+    async def execute(self, name: str, order: dict) -> dict:
+        return {asset.string: [0, 100, 0] for asset in order}
 
     @service()
     async def emit_data(self):
@@ -98,7 +98,7 @@ class TestDataServer(unittest.TestCase):
             # execute order
             socket = context.socket(zmq.REQ)
             socket.connect(f'tcp://127.0.0.1:{ports["order_port"]}')
-            socket.send_json({'FX:EURUSD': -5})  # sell 5 shares
+            socket.send_json({'Strategy': 'MockStrategy', 'FX:EURUSD': -5})  # sell 5 shares
             results['executions'] = socket.recv_json()
             socket.close()
 
