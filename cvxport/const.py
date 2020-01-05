@@ -14,11 +14,11 @@ class Freq(Enum):
     Values are frequency string
     """
     MONTHLY = 'month'
-    DAILY = 'D'
-    HOURLY = 'H'
+    DAILY = '1D'
+    HOURLY = '1H'
     MINUTE = '1min'
     MINUTE5 = '5min'
-    SECOND = 'S'
+    SECOND = '1S'
     SECOND5 = '5S'
     SECOND10 = '10S'
     TICK = 'tick'  # for testing only. We don't have the infra to trade on tick
@@ -48,6 +48,8 @@ class CCode(Enum):
     UnknownRequest = -4
     UnKnownBroker = -5
     ServerNotOnline = -6
+    MissingDataServerInfo = -7
+    MissingName = -8
 
 
 class DCode(Enum):

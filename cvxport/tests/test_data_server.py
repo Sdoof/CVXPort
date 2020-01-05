@@ -17,7 +17,7 @@ from cvxport.worker import service, schedulable
 
 class MockDataServer(DataServer):
     def __init__(self):
-        super().__init__(const.Broker.MOCK)
+        super().__init__(const.Broker.MOCK, const.Freq.MINUTE5, offset=1)
         self.check = []
 
     async def subscribe(self, assets: List[Asset]):
@@ -67,7 +67,9 @@ class TestDataServer(unittest.TestCase):
             socket = context.socket(zmq.REQ)
             socket.connect(f'tcp://127.0.0.1:{Config["controller_comm_port"]}')
             socket.send_string('DataServer:MOCK')
-            ports = socket.recv_json()
+            parts = socket.recv_json()
+            ports = parts['ports']
+            results['info'] = parts['info']
             results['ports'] = ports
             socket.close()
 
@@ -108,6 +110,7 @@ class TestDataServer(unittest.TestCase):
 
         # check ports
         self.assertEqual(len(results['ports']), 3)  # return exactly 2 ports
+        self.assertDictEqual(results['info'], {'freq': '5min', 'offset': 1})  # return exactly 2 ports
         self.assertDictEqual(results['ret'], {'code': const.DCode.Succeeded.value})
 
         # check double subscription

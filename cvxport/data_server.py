@@ -23,13 +23,16 @@ class DataServer(SatelliteWorker, abc.ABC):
     1. reply subscribed symbols
     2.
     """
-    def __init__(self, broker: const.Broker):
-        super(DataServer, self).__init__(f'DataServer:{broker.name}')
+    def __init__(self, broker: const.Broker, update_freq: const.Freq, offset: 0):
+        super(DataServer, self).__init__(f'DataServer:{broker.name}', {'freq': update_freq.value, 'offset': offset})
         self.broker = broker
+        self.update_freq = update_freq
+        self.offset = offset
+
         self.subscription_wait_time = Config['subscription_wait_time']
         self.data_queue = None
         self.subscribed = {}
-        self.store = DataStore(broker, const.Freq.MINUTE5)  # we use 5sec bar from IB
+        self.store = DataStore(broker, update_freq)  # we use 5sec bar from IB
 
     @startup()
     async def _startup(self):
@@ -39,6 +42,9 @@ class DataServer(SatelliteWorker, abc.ABC):
     # -------------------- To override --------------------
     @abc.abstractmethod
     async def subscribe(self, assets: List[Asset]):
+        """
+        Handle subscription to broker
+        """
         pass
 
     @abc.abstractmethod
@@ -123,7 +129,7 @@ class IBDataServer(DataServer):
     }  # type: Dict[const.AssetClass, str]
 
     def __init__(self):
-        super(IBDataServer, self).__init__(const.Broker.IB)
+        super(IBDataServer, self).__init__(const.Broker.IB, const.Freq.SECOND5, offset=1)
         self.handles = {}
         # noinspection PyTypeChecker
         self.ib = None  # type: ibs.IB

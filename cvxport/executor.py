@@ -42,15 +42,18 @@ class Executor(SatelliteWorker):
         """
         await socket.send_string(f'DataServer:{self.broker.name}')
         struct = await utils.wait_for_reply(socket, self.wait_time, const.CCode, 'Port request')  # type: dict
+        ports, info = struct['ports'], struct['info']
+        self.logger.info(f'Receive Data Server "{self.broker.name}" ports {ports}')
+        self.logger.info(f'Receive Data Server "{self.broker.name}" info {info}')
 
         # setup panel
         strategy = self.strategy
-        # self.panel = BarPanel(strategy.assets, strategy.freq, const.Freq(struct['freq']), strategy.lookback)
-        self.panel = BarPanel(strategy.assets, strategy.freq, const.Freq.SECOND5, strategy.lookback)
+        self.panel = BarPanel(strategy.assets,
+                              bar_freq=strategy.freq, update_freq=const.Freq(info['freq']),
+                              lookback=strategy.lookback, offset=info['offset'])
 
         # update port map
-        # del struct['freq']
-        self.port_map.update(struct)
+        self.port_map.update(ports)
 
     # -------------------- Set up in 2nd stage --------------------
     @schedulable(sub_socket='subscription_port|REQ', broadcast_socket='data_port|SUB')
@@ -64,6 +67,7 @@ class Executor(SatelliteWorker):
 
         await sub_socket.send_string(msg)
         await utils.wait_for_reply(sub_socket, self.wait_time, const.DCode, 'Data subscription')  # use DCode
+        self.logger.info('Data subscribed')
 
         # subscribe to ticker
         for asset_string in self.asset_strings:
@@ -73,6 +77,7 @@ class Executor(SatelliteWorker):
     @service(data_socket='data_port|SUB', order_socket='order_port|REQ')
     async def run_strategy(self, data_socket: azmq.Socket, order_socket: azmq.Socket):
         bars = self.panel.update(str_to_datum(await data_socket.recv_string()))
+
         if bars is not None:
             timestamp, prices = bars
             new_positions = self.strategy.generate_positions(timestamp, prices)
@@ -84,8 +89,9 @@ class Executor(SatelliteWorker):
                 order = {k: v for k, v in zip(self.asset_strings, position_delta) if abs(v) >= 1}
                 order['Strategy'] = self.name
                 order_socket.send_json(order)
-                # executions = await utils.wait_for_reply(order_socket, self.wait_time, const.DCode, 'Order execution')
-                executions = await utils.wait_for_reply(order_socket, 60, const.DCode, 'Order execution')
+                self.logger.info(f'Sent order {order}')
+
+                executions = await utils.wait_for_reply(order_socket, self.wait_time, const.DCode, 'Order execution')
 
                 # for post processing
                 self.equity_curve.update(timestamp, executions, prices['close'][-1])

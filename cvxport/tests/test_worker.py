@@ -6,7 +6,8 @@ import threading
 import zmq
 
 from cvxport.worker import SatelliteWorker, service, schedulable
-from cvxport import const, JobError
+from cvxport.controller import Controller
+from cvxport import const, JobError, Config
 
 
 # mock class
@@ -14,7 +15,7 @@ class MockedWorker(SatelliteWorker):
     @schedulable()
     async def kill(self):
         await asyncio.sleep(3)
-        raise JobError("Time's up")
+        raise JobError('Killed')
 
 
 class MockedWorker2(MockedWorker):
@@ -25,6 +26,13 @@ class MockedWorker2(MockedWorker):
     @service(socket='dummy_port2|REP')
     async def dummy_job2(self, socket):
         await asyncio.sleep(0)
+
+
+class MockedController(Controller):
+    @schedulable()
+    async def kill(self):
+        await asyncio.sleep(3)
+        raise JobError('Killed')
 
 
 class TestSatelliteWorker(unittest.TestCase):
@@ -90,12 +98,12 @@ class TestSatelliteWorker(unittest.TestCase):
             socket.bind(f'tcp://127.0.0.1:{worker.port_map["controller_port"]}')
 
             # mock registration
-            messages.append(socket.recv_string())
+            messages.append(socket.recv_json())
             socket.send_json({'dummy_port': starting_port + 1, 'dummy_port2': starting_port + 2})
 
             # mock heartbeat
             for _ in range(4):
-                messages.append(socket.recv_string())
+                messages.append(socket.recv_json())
                 socket.send_json({'code': const.CCode.Succeeded.value})
 
         t = threading.Thread(target=mock_controller)
@@ -110,7 +118,9 @@ class TestSatelliteWorker(unittest.TestCase):
         t.join()
         self.assertGreater(duration, 2)  # 4 heartbeats take 2s
         self.assertLess(duration, 2.5)  # wait time add 0.2, so the process should take around 2.2s
-        self.assertListEqual(messages, ['test|dummy_port|dummy_port2', 'test', 'test', 'test', 'test'])
+        self.assertListEqual(messages,
+                             [{'name': 'test', 'type': 'register', 'ports': ['dummy_port', 'dummy_port2']}] +
+                             [{'name': 'test', 'type': 'hb'}] * 4)
         self.assertDictEqual(worker.port_map, {'controller_port': starting_port,
                                                'dummy_port': starting_port + 1,
                                                'dummy_port2': starting_port + 2})
@@ -138,6 +148,34 @@ class TestSatelliteWorker(unittest.TestCase):
         self.assertEqual(str(cm.exception), 'NotInRegistry')
 
         t.join()
+
+    def test_controller_interaction(self):
+        agents = {}
+
+        def run_worker():
+            time.sleep(0.2)
+            worker = MockedWorker2('test')
+            worker.heartbeat_interval = 0.5
+            worker.wait_time = 0.2
+            agents['worker'] = worker
+            worker.run()
+
+        def run_controller():
+            controller = MockedController()
+            controller.heartbeat_interval = 0.5
+            agents['controller'] = controller
+            controller.run()
+
+        threads = [threading.Thread(target=func) for func in [run_controller, run_worker]]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+
+        start_port = Config['starting_port']
+        con_port = Config['controller_port']
+        self.assertIn('test', agents['controller'].registry)
+        self.assertEqual(agents['worker'].port_map,
+                         {'controller_port': con_port, 'dummy_port': start_port, 'dummy_port2': start_port + 1})
+
 
 
 if __name__ == '__main__':

@@ -182,9 +182,14 @@ class SatelliteWorker(Worker):
     1. register with controller
     2. keep track of connection with controller
     """
-    def __init__(self, name: str):
+    def __init__(self, name: str, registration_info: dict = None):
+        """
+        :param name: worker name
+        :param registration_info: extra information to be sent in registration
+        """
         super(SatelliteWorker, self).__init__(name)
         self.wait_time = Config['startup_wait_time']
+        self.registration_info = registration_info
 
         # make sure heartbeat is sent at least once between registry check
         self.heartbeat_interval = Config['heartbeat_interval'] - 1
@@ -195,20 +200,24 @@ class SatelliteWorker(Worker):
     # ==================== Startup ====================
     @startup(socket='controller_port|REQ')
     async def register(self, socket: azmq.Socket):
-        # figure out number of ports need to be requested
+        # figure out ports to request for
         jobs = [job for _, job in inspect.getmembers(self, inspect.ismethod) if getattr(job, '__job__', 0) > 1]
         names = [s.split('|')[0] for s in utils.flatten(list(job.__sockets__.values()) for job in jobs)]
         minimal_names = sorted([name for name in utils.unique(names) if name not in self.port_map])
 
         # request for ports
-        await socket.send_string(f'{self.name}|{"|".join(minimal_names)}')
+        msg = {'name': self.name, 'type': 'register', 'ports': minimal_names}
+        if self.registration_info:
+            msg['info'] = self.registration_info
+        await socket.send_json(msg)
+
         ports = await utils.wait_for_reply(socket, self.wait_time, const.CCode, 'Controller registration')
         self.port_map.update(ports)
-        self.logger.info(f'Successfully register {self.name}')
+        self.logger.info(f'Successfully registered {self.name}')
 
     # ==================== Services ====================
     @service(socket='controller_port|REQ')
     async def emit_heartbeat(self, socket: azmq.Socket):
-        await socket.send_string(self.name)
+        await socket.send_json({'name': self.name, 'type': 'hb'})
         await utils.wait_for_reply(socket, self.wait_time, const.CCode, 'Heartbeat')
         await asyncio.sleep(self.heartbeat_interval)

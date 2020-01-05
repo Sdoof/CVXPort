@@ -35,65 +35,90 @@ class Controller(Worker):
         self.data_servers = {}
         self.executors = {}
 
+    # ==================== Registration ====================
+    async def handle_registration(self, socket, req):
+        name = req['name']  # type: str
+
+        if 'ports' not in req:
+            self.logger.warning(f'Missing ports in registration request {req}')
+            await socket.send_json({'code': const.CCode.MissingRequiredPort.value})
+            return
+
+        ports = {p: -1 for p in req['ports']}  # type: Dict[str, int]
+
+        # duplicated worker
+        if name in self.registry:
+            await socket.send_json({'code': const.CCode.AlreadyRegistered.value})
+            return
+
+        if name.startswith('DataServer:'):
+            # noinspection PyBroadException
+            try:
+                broker_name = const.Broker(name.split(':')[1]).name  # implicitly check validity of broker
+            except Exception:
+                await socket.send_json({'code': const.CCode.UnKnownBroker.value})
+                return
+
+            # check ports
+            if any(port not in ports
+                   for port in ['subscription_port', 'data_port', 'order_port']):
+                await socket.send_json({'code': const.CCode.MissingRequiredPort.value})
+                return
+
+            # check info
+            if 'info' not in req or 'freq' not in req['info'] or 'offset' not in req['info']:
+                await socket.send_json({'code': const.CCode.MissingDataServerInfo.value})
+                return
+
+            self.data_servers[broker_name] = {'ports': ports, 'info': req['info']}
+
+        # assign ports
+        for port in ports:
+            ports[port] = self.current_usable_port
+            self.current_usable_port += 1
+
+        # register and return ports
+        self.registry[name] = pd.Timestamp.now('EST')
+        await socket.send_json(ports)
+        self.logger.info(f'Registered "{name}"')
+
     # ==================== Heartbeat ====================
     @service(socket='controller_port|REP')
     async def handle_registration_and_heartbeat(self, socket: azmq.Socket):
         """
         1. handle registration
         2. update heartbeat
-        # TODO: should implement port recycling in the future
         """
-        raw = await socket.recv_string()
-        msg = raw.split('|')  # either "name|port1|port2..." or "name"
+        req = await socket.recv_json()
+
+        # preliminary checks
+        if 'type' not in req:
+            self.logger.warning(f'Unknown request {req}')
+            await socket.send_json({'code': const.CCode.UnknownRequest.value})
+            return
+
+        if 'name' not in req:
+            self.logger.warning(f'Missing name {req}')
+            await socket.send_json({'code': const.CCode.MissingName.value})
+            return
 
         # registration
-        if len(msg) > 1:
-            name = msg[0]  # type: str
-            ports = {p: 0 for p in msg[1:] if p != ''}  # type: Dict[str, int]
-
-            # duplicated worker
-            if name in self.registry:
-                await socket.send_json({'code': const.CCode.AlreadyRegistered.value})
-                return
-
-            if name.startswith('DataServer:'):
-                # noinspection PyBroadException
-                try:
-                    broker_name = const.Broker(name.split(':')[1]).name  # implicitly check validity of broker
-                except Exception:
-                    await socket.send_json({'code': const.CCode.UnKnownBroker.value})
-                    return
-
-                if any(port not in ports
-                       for port in ['subscription_port', 'data_port', 'order_port']):
-                    await socket.send_json({'code': const.CCode.MissingRequiredPort.value})
-                    return
-
-                self.data_servers[broker_name] = ports
-                self.logger.info(f'Registering data server {broker_name}')
-
-            # assign ports
-            for port in ports:
-                ports[port] = self.current_usable_port
-                self.current_usable_port += 1
-
-            # register and return ports
-            self.registry[name] = pd.Timestamp.now('EST')
-            await socket.send_json(ports)
+        if req['type'] == 'register':
+            await self.handle_registration(socket, req)
 
         # heartbeat
-        elif len(msg) == 1:
-            name = msg[0]
+        elif req['type'] == 'hb':
+            name = req['name']
             if name in self.registry:
                 self.registry[name] = pd.Timestamp.now('EST')
                 await socket.send_json({'code': const.CCode.Succeeded.value})
             else:
                 await socket.send_json({'code': const.CCode.NotInRegistry.value})
-                self.logger.warning(f'Potentially lose track of registration {raw}')
+                self.logger.warning(f'Potentially lose track of registration {req}')
 
         else:
             await socket.send_json({'code': const.CCode.UnknownRequest.value})
-            self.logger.warning(f'Receive improper registration request {raw}')
+            self.logger.warning(f'Receive improper registration request {req}')
 
     @service()
     async def organize_registry(self):
@@ -129,11 +154,13 @@ class Controller(Worker):
     @service(socket='controller_comm_port|REP')
     async def handle_communication(self, socket: azmq.Socket):
         msg = await socket.recv_string()  # type: str
-        self.logger.info(f'Receive Data Server request {msg}')
+        self.logger.info(f'Receive Data Server request "{msg}"')
         if msg.startswith('DataServer:'):
             if msg in self.registry:
                 await socket.send_json(self.data_servers[msg.split(':')[1]])
+                self.logger.info('Sent Data Server ports and info')
             else:
                 await socket.send_json({'code': const.CCode.ServerNotOnline.value})
+                self.logger.info('Data Server is not registered yet')
         else:
             await socket.send_json({'code': const.CCode.UnknownRequest.value})
