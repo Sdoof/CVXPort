@@ -19,11 +19,25 @@ def generate_wrapper(priority: int, sockets):
     return wrapper
 
 
-def startup(**sockets):
+def startup(*priority, **sockets):
     """
     To label the awaitable as start-up procedure that must succeed before services are run
     """
-    return generate_wrapper(1, sockets)
+    rank = 1
+    if len(priority) == 1:
+        priority = priority[0]
+        if not isinstance(priority, int):
+            raise ValueError('Priority should be integer')
+
+        if priority < 0 or priority > 9:
+            raise ValueError('Priority should be within 0 to 9')
+
+        rank += priority / 10
+
+    elif len(priority) > 1:
+        raise ValueError('Too many arguments')
+
+    return generate_wrapper(rank, sockets)
 
 
 def schedulable(**sockets):
@@ -114,7 +128,7 @@ class Worker(abc.ABC):
         ordered_groups = sorted(job_groups.keys())
         for group in ordered_groups:
             self.logger.info('')
-            self.logger.info(f'========== {Worker.stage_map[group]} ==========')  # log stage
+            self.logger.info(f'========== {Worker.stage_map[int(group)]} ==========')  # log stage
             jobs_per_group = job_groups[group]
 
             # get all socket specs
@@ -198,7 +212,7 @@ class SatelliteWorker(Worker):
         self.port_map['controller_port'] = Config['controller_port']
 
     # ==================== Startup ====================
-    @startup(socket='controller_port|REQ')
+    @startup(5, socket='controller_port|REQ')  # Use priority 5 so that we can insert job before after this if needed
     async def register(self, socket: azmq.Socket):
         # figure out ports to request for
         jobs = [job for _, job in inspect.getmembers(self, inspect.ismethod) if getattr(job, '__job__', 0) > 1]

@@ -19,15 +19,17 @@ from cvxport.controller import Controller
 class MockedExecutor(Executor):
     @schedulable()
     async def kill(self):
-        await asyncio.sleep(6)
+        await asyncio.sleep(5)
         raise JobError('Killed')
 
 
 class MockDataServer(DataServer):
     def __init__(self):
         super().__init__(const.Broker.MOCK, const.Freq.SECOND, offset=1)
+        self.orders = []
 
     async def execute(self, name: str, order: Dict[Asset, int]) -> dict:
+        self.orders.append(order)
         return {}
 
     async def subscribe(self, assets: List[Asset]):
@@ -41,19 +43,21 @@ class MockDataServer(DataServer):
 
     @schedulable()
     async def kill(self):
-        await asyncio.sleep(6)
+        await asyncio.sleep(5)
         raise JobError("Killed")
 
 
 class MockedController(Controller):
     @schedulable()
     async def kill(self):
-        await asyncio.sleep(6)
+        await asyncio.sleep(5)
         raise JobError("Killed")
 
 
 class TestExecutor(unittest.TestCase):
     def test_startup(self):
+        results = {}
+
         def run_executor():
             time.sleep(1)
             executor = MockedExecutor(
@@ -65,6 +69,7 @@ class TestExecutor(unittest.TestCase):
         def run_data_server():
             server = MockDataServer()
             server.run()
+            results['ds'] = server.orders
 
         def run_controller():
             controller = MockedController()
@@ -73,6 +78,8 @@ class TestExecutor(unittest.TestCase):
         threads = [threading.Thread(target=func) for func in [run_executor, run_data_server, run_controller]]
         [t.start() for t in threads]
         [t.join() for t in threads]
+
+        self.assertGreater(len(results['ds']), 2)
 
 
 if __name__ == '__main__':

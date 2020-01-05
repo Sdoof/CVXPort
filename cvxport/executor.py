@@ -35,7 +35,7 @@ class Executor(SatelliteWorker):
         self.equity_curve = EquityCurve(strategy.assets, capital)
 
     # -------------------- Startup --------------------
-    @startup(socket='controller_comm_port|REQ')
+    @startup(1, socket='controller_comm_port|REQ')  # priority 1. This will be run before requesting ports
     async def connect(self, socket: azmq.Socket):
         """
         Ask for ports of data server
@@ -55,11 +55,12 @@ class Executor(SatelliteWorker):
         # update port map
         self.port_map.update(ports)
 
-    # -------------------- Set up in 2nd stage --------------------
+    # -------------------- Startup 2nd stage --------------------
     @schedulable(sub_socket='subscription_port|REQ', broadcast_socket='data_port|SUB')
     async def subscribe(self, sub_socket: azmq.Socket, broadcast_socket: azmq.Socket):
         """
         Send subscription request to data server and subscribe
+        This job can't be run as startup sequence. Otherwise, we lose the subscribed assets
         """
         # send subscription
         msg = ','.join(self.asset_strings)
