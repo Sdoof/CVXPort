@@ -1,6 +1,4 @@
 
-def func(ind):
-    print('yes')
-    return ind
+from cvxport.data import DatabaseEquityCurve
 
-print(all(func(i) for i in [1, 0, 1]))
+curve = DatabaseEquityCurve

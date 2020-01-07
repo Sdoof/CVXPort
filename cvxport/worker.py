@@ -110,7 +110,9 @@ class Worker(abc.ABC):
             asyncio.run(self._run())
         except JobError as e:
             self.logger.warning(e)  # JobError is not unexpected errors.
+            self.logger.info('Exited')
         except Exception:
+            self.logger.info('Exited')
             self.logger.exception('Unexpected Error!')
 
     # ==================== Helper ====================
@@ -185,7 +187,6 @@ class Worker(abc.ABC):
                 for socket in sockets.values():
                     socket.close()
 
-                # TODO: this is hacky. Should restructure the startup and group 2 jobs
                 if group == 2:
                     self.logger.info('\n========== Shutting Down ==========')
                     await self.shutdown()

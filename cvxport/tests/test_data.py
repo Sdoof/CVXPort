@@ -9,11 +9,13 @@ import asyncio
 import psycopg2 as pg
 from pytz import timezone
 from datetime import datetime
+import asyncpg as apg
+import json
 
 from cvxport import Config
 from cvxport.data import DataStore, Datum, Asset
 from cvxport.data import TickAggregator, TimedBars, BarPanel, BarPanel2, MT4DataObject, DownSampledBar, BarCoordinator
-from cvxport.data import EquityCurve
+from cvxport.data import InMemoryEquityCurve, AgentState
 from cvxport.const import Freq, Broker
 from cvxport import const
 
@@ -536,7 +538,7 @@ class TestEquityCurve(unittest.TestCase):
         a1 = 'STK:AAPL'
         a2 = 'STK:MSFT'
         assets = [Asset(a1), Asset(a2)]
-        equity = EquityCurve(assets, 10000)
+        equity = InMemoryEquityCurve(assets, 10000)
         equity.update(pd.Timestamp('2019-01-01'), {a1: [10, 200, 10], a2: [100, 50, 5]}, np.array([200, 50]))
         equity.update(pd.Timestamp('2019-01-02'), {a1: [-5, 250, 5], a2: [-80, 45, 5]}, np.array([250, 45]))
         equity.update(pd.Timestamp('2019-01-02'), {a1: [-10, 220, 10]}, np.array([220, 60]))
@@ -544,6 +546,46 @@ class TestEquityCurve(unittest.TestCase):
                                                   [-1100, 1200, 10050]])
         assert_array_equal(equity.shares, [[0, 0], [10, 100], [5, 20], [-5, 20]])
         assert_array_equal(equity.commissions, [[0, 0], [10, 5], [5, 5], [10, 0]])
+
+
+class TestAgentState(unittest.TestCase):
+    def test_agent_state(self):
+        async def main():
+            database = Config['agent_db']
+            user = Config['postgres_user']
+            password = Config['postgres_pass']
+            port = Config['postgres_port']
+
+            conn = await apg.connect(database=database, user=user, password=password, host='127.0.0.1', port=port)
+            agent_state = AgentState('mock_agent')
+            await agent_state.connect()
+
+            # test init
+            res = await conn.fetch('select * from mock_agent_state')
+            self.assertEqual(len(res), 1)
+            self.assertEqual(res[0]['state'], '{}')
+
+            # test update
+            state = {'name': 'agent_state'}
+            await agent_state.update_state(state)
+            res = await conn.fetch('select * from mock_agent_state')
+            self.assertEqual(len(res), 1)
+            self.assertEqual(res[0]['state'], json.dumps(state))
+
+            # test consecutive update
+            state = {'name': 'mock'}
+            await agent_state.update_state(state)
+            res = await conn.fetch('select * from mock_agent_state')
+            self.assertEqual(len(res), 1)
+            self.assertEqual(res[0]['state'], json.dumps(state))
+
+            # clean up
+            await agent_state.disconnect()
+            await conn.execute('drop table mock_agent_state')
+            await conn.close()
+
+        asyncio.run(main())
+
 
 
 if __name__ == '__main__':

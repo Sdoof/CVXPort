@@ -61,11 +61,11 @@ class DataServer(SatelliteWorker, abc.ABC):
     @service(socket='subscription_port|REP')
     async def process_subscription(self, socket: azmq.Socket):
         """
-        Receive request of the form "asset1|ticker1,asset2|ticker2,..."
+        Receive request of the form "asset1:ticker1,asset2:ticker2,..."
         Subscribe to the broker
         TODO: add handling for exception. Currently always succeed
         """
-        msg = await socket.recv_string()  # format: asset1|ticker1,asset2|ticker2,...
+        msg = await socket.recv_string()  # format: asset1:ticker1,asset2:ticker2,...
         self.logger.info(f'Receive subscription request on {msg}')
 
         # filter existing assets
@@ -137,7 +137,12 @@ class IBDataServer(DataServer):
     @startup()
     async def initialize_ib_connection(self):
         self.ib = ibs.IB()
-        await self.ib.connectAsync('127.0.0.1', Config['ib_port'])
+
+        try:
+            await self.ib.connectAsync('127.0.0.1', Config['ib_port'])
+        except asyncio.TimeoutError:
+            raise JobError('IB Gateway is not online')
+
         self.logger.info(f'IB connected')
 
     # -------------------- Helpers --------------------
@@ -147,6 +152,25 @@ class IBDataServer(DataServer):
             return f'FX:{contract.symbol}{contract.currency}'
         elif isinstance(contract, ibs.Stock):
             return f'STK:{contract.symbol}'
+
+    # -------------------- IB Connection --------------------
+    @service()
+    async def check_gateway_connection(self):
+        if not self.ib.isConnected():
+            self.logger.warning('Gateway connection lost. Trying to reconnect ...')
+
+            duration = self.heartbeat_interval
+            while not self.ib.isConnected():
+                # noinspection PyBroadException
+                try:
+                    await self.ib.connectAsync('127.0.0.1', Config['ib_port'])
+                except Exception:
+                    self.logger.info(f'Retry connecting in {duration}s')
+                    await asyncio.sleep(duration)
+
+            self.logger.info('Gateway connection re-established')
+
+        await asyncio.sleep(self.heartbeat_interval)
 
     # -------------------- Subscription --------------------
     async def subscribe(self, assets: List[Asset]):

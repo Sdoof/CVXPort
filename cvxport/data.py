@@ -6,8 +6,8 @@ Host
 """
 import abc
 import asyncio
-from datetime import datetime
 import zmq
+import json
 import zmq.asyncio as azmq
 from typing import AsyncGenerator, Tuple, Dict, List, Union
 import pandas as pd
@@ -110,7 +110,173 @@ class DataStore:
         await self.con.execute(sql)
 
 
-class EquityCurve:
+class AgentState:
+    def __init__(self, name: str):
+        self.table_name = name.lower() + '_state'
+        self.con = None
+        self.prepared = f'update {self.table_name} set state = $1'
+
+    async def connect(self):
+        database = Config['agent_db']
+        user = Config['postgres_user']
+        password = Config['postgres_pass']
+        port = Config['postgres_port']
+
+        self.con = await apg.connect(database=database, user=user, password=password, host='127.0.0.1', port=port)
+        await self.con.set_type_codec('json', encoder=json.dumps, decoder=json.loads, schema='pg_catalog')
+        await self._create_table_if_not_exists()
+
+    async def disconnect(self):
+        await self.con.close()
+
+    async def _create_table_if_not_exists(self):
+        sql = f"""
+            create table if not exists {self.table_name} (
+                state json not null
+            )
+        """
+        await self.con.execute(sql)
+
+        # set default
+        res = await self.con.fetchrow(f'select count(*) from {self.table_name}')
+        if res['count'] == 0:
+            await self.con.execute(f'insert into {self.table_name} values($1)', {})
+
+    async def update_state(self, state: dict):
+        await self.con.execute(self.prepared, state)
+
+    async def check_table_exists(self, table_name):
+        res = await self.con.fetch('select 1 from information_schema.tables where table_name = $1', table_name)
+        if len(res) > 0:
+            return True
+        return False
+
+
+class EquityCurve0(abc.ABC):
+    def __init__(self, assets: List[Asset], cash, market_values: np.ndarray = None,
+                 shares: np.ndarray = None, equity: float = None, equity_w_comm: float = None):
+        self.assets = assets
+        self.asset_strings = [asset.string for asset in assets]
+        self.N = len(assets)
+
+        # numbers from previous update
+        self.timestamp = None
+        self.cash = cash
+        self.market_values = market_values if market_values is not None else np.zeros(self.N)
+        self.commissions = np.zeros(self.N)
+        self.shares = shares if shares is not None else np.zeros(self.N)
+        self.slippages = np.zeros(self.N)
+        self.equity = cash if equity is None else equity
+        self.equity_w_comm = self.equity if equity_w_comm is None else equity_w_comm
+
+    # -------------------- Override --------------------
+    @abc.abstractmethod
+    def _update(self):
+        pass
+
+    @abc.abstractmethod
+    def get_equity(self) -> pd.DataFrame:
+        pass
+
+    # -------------------- Main methods --------------------
+    def update(self, timestamp: pd.Timestamp, executions: dict, prices: np.ndarray):
+        self.timestamp = timestamp
+
+        for idx, asset in enumerate(self.asset_strings):
+            # execution is of the form [share delta, price, commission]
+            exe = executions[asset] if asset in executions else [0, prices[idx], 0]
+            self.shares[idx] += exe[0]
+            self.market_values[idx] = self.shares[idx] * exe[1]  # assume executed price is the market price
+            self.commissions[idx] = exe[2]
+            self.cash -= exe[0] * exe[1]  # delta * price
+
+        new_equity = np.sum(self.market_values) + self.cash
+        self.equity_w_comm += new_equity - self.equity - np.sum(self.commissions)  # commission is cumulative
+        self.equity = new_equity
+        self._update()
+
+    def get_stats(self) -> pd.DataFrame:
+        """
+        returns return, stddev, Sharpe, max drawdown on equity w/wo commission
+        """
+        curves = self.get_equity()
+        ret = np.power(curves[-1] / curves[0], 252 / curves.shape[0]) - 1
+        sd = np.std(ret.to_numpy()) * np.sqrt(252)
+        sharpe = ret / sd if sd > 0 else np.nan
+        dd = [self.calculate_drawdown(series) for series in [curves['equity'], curves['equity_w_comm']]]
+        return pd.DataFrame([ret, sd, sharpe, dd], columns=['Equity', 'Equity w Comm'],
+                            index=['Return', 'Stddev', 'Sharpe', 'max DD'])
+
+    @staticmethod
+    def calculate_drawdown(ts):
+        peak = ts[0]
+        dd = 0
+        for x in ts:
+            peak = max(peak, x)
+            dd = min(dd, min(x / peak - 1, 0))
+        return dd
+
+
+class DatabaseEquityCurve(EquityCurve0):
+    def __init__(self, name: str, assets: List[Asset], capital=-1):
+        """
+        :param assets:
+        :param capital: -1 means using existing capital
+        """
+
+        super(DatabaseEquityCurve, self).__init__(assets, )
+        self.table_name = name
+        self.con = None
+        self.prepared = f'insert into {self.table_name} values($1, $2, $3, $4, $5, $6, $7, $8, $9)'
+
+    async def connect(self):
+        database = Config['strategy_db']
+        user = Config['postgres_user']
+        password = Config['postgres_pass']
+        port = Config['postgres_port']
+
+        self.con = await apg.connect(database=database, user=user, password=password, host='127.0.0.1', port=port)
+        await self._create_table_if_not_exists()
+
+    async def check_table_exists(self, table_name):
+        res = await self.con.fetch('select 1 from information_schema.tables where table_name = $1', table_name)
+        if len(res) > 0:
+            return True
+        return False
+
+    async def _create_table_if_not_exists(self):
+        sql = f"""
+            create table if not exists {self.table_name}(
+                timestamp timestamp with time zone not null,
+                record_time timestamp with time zone not null,
+                shares json not null,
+                cash double precision not null,
+                market_values json not null,
+                commissions json not null,
+                slippages json default '',
+                equity double precision not null,
+                equity_w_comm double precision not null,
+                primary key(timestamp, record_time)
+            )
+        """
+        await self.con.execute(sql)
+
+    async def _update(self):
+        shares = {k: v for k, v in zip(self.asset_strings, self.shares)}
+        market_values = {k: v for k, v in zip(self.asset_strings, self.market_values)}
+        commissions = {k: v for k, v in zip(self.asset_strings, self.commissions) if v != 0.0}
+        slippages = {k: v for k, v in zip(self.asset_strings, self.slippages) if v != 0.0}
+
+        await self.con.execute(self.prepared,
+                               self.timestamp, pd.Timestamp.utcnow(),
+                               shares, self.cash, market_values, commissions, slippages,
+                               self.equity, self.equity_w_comm)
+
+    def get_equity(self) -> pd.DataFrame:
+        pass
+
+
+class InMemoryEquityCurve:
     def __init__(self, assets: List[Asset], capital):
         self.asset_strings = [asset.string for asset in assets]
         self.capital= capital

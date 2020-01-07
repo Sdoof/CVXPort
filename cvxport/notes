@@ -13,3 +13,12 @@ Asyncio Notes
 
 TODO: why 0 commission? because there is no fill?
 TODO: fix update freq and offset auto-update in data server and executor
+TODO: add subscription memory to data server
+TODO: equity curve object to save shares, prices, slippages, commission
+TODO: add logger to service. Don't throw non JobError exception. Rather just log them
+TODO: IB server should check if IB connection is valid
+TODO: IB server auto-reconnect
+TODO: DatabaseEquityCurve optimize to prepare statement
+TODO: Add AgentState for saving state of workers
+TODO: Data server to remember subscription and auto re-submit
+TODO: restructure IB DataServer auto-reconnect to be shared in startup

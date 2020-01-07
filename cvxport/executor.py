@@ -4,7 +4,7 @@ import zmq.asyncio as azmq
 from typing import List
 
 from cvxport import const, Asset, utils, Config
-from cvxport.data import str_to_datum, BarPanel, EquityCurve
+from cvxport.data import str_to_datum, BarPanel, InMemoryEquityCurve
 from cvxport.strategy import Strategy
 from cvxport.worker import SatelliteWorker, startup, schedulable, service
 
@@ -32,7 +32,7 @@ class Executor(SatelliteWorker):
         # data structure setup
         # noinspection PyTypeChecker
         self.panel = None  # type: BarPanel
-        self.equity_curve = EquityCurve(strategy.assets, capital)
+        self.equity_curve = InMemoryEquityCurve(strategy.assets, capital)
 
     # -------------------- Startup --------------------
     @startup(1, socket='controller_comm_port|REQ')  # priority 1. This will be run before requesting ports

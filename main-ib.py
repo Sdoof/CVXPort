@@ -36,6 +36,11 @@ async def main():
     bars = ib.reqRealTimeBars(contracts[0], 5, 'MIDPOINT', True)
     bars.updateEvent += show
 
+    def print_yes():
+        print('yes!')
+
+    ib.updateEvent += print_yes
+
     # for i in range(2):
     #     trades = []
     #

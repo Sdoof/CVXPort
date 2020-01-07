@@ -26,7 +26,10 @@ Config = {
     # ---------- Data Server ----------
     'pystore_path': 'C:/Users/Albert/PycharmProjects/CVXPort/pystore',
     'subscription_wait_time': 5,
+
+    # ---------- Postgres ----------
     'postgres_db': 'bar_data',
+    'agent_db': 'agent_obj',
     'postgres_user': 'postgres',
     'postgres_pass': 'key',
     'postgres_port': 5432,
