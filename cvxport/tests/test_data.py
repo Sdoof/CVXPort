@@ -557,35 +557,38 @@ class TestAgentState(unittest.TestCase):
             port = Config['postgres_port']
 
             conn = await apg.connect(database=database, user=user, password=password, host='127.0.0.1', port=port)
+            await conn.execute("delete from agents where name = 'mock_agent'")
+
             agent_state = AgentState('mock_agent')
             await agent_state.connect()
+            self.assertIsNone(await agent_state.get_state())
 
             # test init
-            res = await conn.fetch('select * from mock_agent_state')
+            res = await conn.fetch("select * from agents where name = 'mock_agent'")
             self.assertEqual(len(res), 1)
-            self.assertEqual(res[0]['state'], '{}')
+            self.assertEqual(res[0]['state'], None)
 
             # test update
-            state = {'name': 'agent_state'}
+            state = {'positions': [1, 2, 3]}
             await agent_state.update_state(state)
-            res = await conn.fetch('select * from mock_agent_state')
+            res = await conn.fetch("select * from agents where name = 'mock_agent'")
             self.assertEqual(len(res), 1)
             self.assertEqual(res[0]['state'], json.dumps(state))
+            self.assertEqual(await agent_state.get_state(), state)
 
             # test consecutive update
             state = {'name': 'mock'}
             await agent_state.update_state(state)
-            res = await conn.fetch('select * from mock_agent_state')
+            res = await conn.fetch("select * from agents where name = 'mock_agent'")
             self.assertEqual(len(res), 1)
             self.assertEqual(res[0]['state'], json.dumps(state))
 
             # clean up
             await agent_state.disconnect()
-            await conn.execute('drop table mock_agent_state')
+            await conn.execute("delete from agents where name = 'mock_agent'")
             await conn.close()
 
         asyncio.run(main())
-
 
 
 if __name__ == '__main__':

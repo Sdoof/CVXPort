@@ -112,10 +112,16 @@ class DataStore:
 
 class AgentState:
     def __init__(self, name: str):
-        self.table_name = name.lower() + '_state'
+        self.name = name.lower()
         self.con = None
-        self.prepared = f'update {self.table_name} set state = $1'
+        self._prepared = f"update agents set update_time = $1, state = $2 where name = '{self.name}'"
 
+    # -------------------- Override --------------------
+    async def _start_up(self):
+        # something optional you want to do at startup
+        pass
+
+    # -------------------- Main methods --------------------
     async def connect(self):
         database = Config['agent_db']
         user = Config['postgres_user']
@@ -125,31 +131,35 @@ class AgentState:
         self.con = await apg.connect(database=database, user=user, password=password, host='127.0.0.1', port=port)
         await self.con.set_type_codec('json', encoder=json.dumps, decoder=json.loads, schema='pg_catalog')
         await self._create_table_if_not_exists()
-
-    async def disconnect(self):
-        await self.con.close()
+        await self._start_up()
 
     async def _create_table_if_not_exists(self):
         sql = f"""
-            create table if not exists {self.table_name} (
-                state json not null
+            create table if not exists agents (
+                name varchar(64) not null,
+                update_time timestamp with time zone not null,
+                state json default null,
+                primary key(name)
             )
         """
         await self.con.execute(sql)
 
-        # set default
-        res = await self.con.fetchrow(f'select count(*) from {self.table_name}')
-        if res['count'] == 0:
-            await self.con.execute(f'insert into {self.table_name} values($1)', {})
+        # set default, can't use is_new here
+        if await self.get_state() is None:
+            await self.con.execute(f'insert into agents(name, update_time) values($1, $2)',
+                                   self.name, pd.Timestamp.utcnow())
 
     async def update_state(self, state: dict):
-        await self.con.execute(self.prepared, state)
+        await self.con.execute(self._prepared, pd.Timestamp.utcnow(), state)
 
-    async def check_table_exists(self, table_name):
-        res = await self.con.fetch('select 1 from information_schema.tables where table_name = $1', table_name)
-        if len(res) > 0:
-            return True
-        return False
+    async def get_state(self):
+        state = await self.con.fetchrow(f'select state from agents where name = $1', self.name)
+        if state is None:
+            return None
+        return state['state']
+
+    async def disconnect(self):
+        await self.con.close()
 
 
 class EquityCurve0(abc.ABC):
@@ -217,43 +227,30 @@ class EquityCurve0(abc.ABC):
         return dd
 
 
-class DatabaseEquityCurve(EquityCurve0):
-    def __init__(self, name: str, assets: List[Asset], capital=-1):
+class DatabaseEquityCurve(EquityCurve0, AgentState):
+    def __init__(self, strategy_name: str, assets: List[Asset], capital=-1):
         """
         :param assets:
         :param capital: -1 means using existing capital
         """
-
-        super(DatabaseEquityCurve, self).__init__(assets, )
-        self.table_name = name
-        self.con = None
+        EquityCurve0.__init__(self, assets=assets, cash=capital)
+        AgentState.__init__(self, name=strategy_name)
+        self.table_name = f'equity_{strategy_name.lower()}'
         self.prepared = f'insert into {self.table_name} values($1, $2, $3, $4, $5, $6, $7, $8, $9)'
 
-    async def connect(self):
-        database = Config['strategy_db']
-        user = Config['postgres_user']
-        password = Config['postgres_pass']
-        port = Config['postgres_port']
-
-        self.con = await apg.connect(database=database, user=user, password=password, host='127.0.0.1', port=port)
-        await self._create_table_if_not_exists()
-
-    async def check_table_exists(self, table_name):
-        res = await self.con.fetch('select 1 from information_schema.tables where table_name = $1', table_name)
-        if len(res) > 0:
-            return True
-        return False
+    async def _start_up(self):
+        if not await self.check_table_empty():
+            tbl = self.table_name
+            record = self.con.fetchrow(f'with tmp(select max(record_time) as max_t from {tbl})'
+                                       f'select * from {tbl} inner join tmp on record_time == max_t')
 
     async def _create_table_if_not_exists(self):
         sql = f"""
             create table if not exists {self.table_name}(
                 timestamp timestamp with time zone not null,
                 record_time timestamp with time zone not null,
-                shares json not null,
-                cash double precision not null,
-                market_values json not null,
-                commissions json not null,
-                slippages json default '',
+                state json not null,  -- shares, market_values, commissions, slippages
+                executions json default null,
                 equity double precision not null,
                 equity_w_comm double precision not null,
                 primary key(timestamp, record_time)
